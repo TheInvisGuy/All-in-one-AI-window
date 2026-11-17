@@ -245,7 +245,7 @@ DEFAULTS = {
     "ui_scale": "auto",           # interface size: auto, or 100% ... 300% (for high-resolution screens)
 }
 
-VERSION = "AI_W_2.4.5"
+VERSION = "AI_W_2.4.6"
 
 # ---------------------------------------------------------------------------
 # Updates. The program can look for a newer version and install it from a button in the Shift+M menu.
