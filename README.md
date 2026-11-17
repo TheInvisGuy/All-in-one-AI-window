@@ -1,2 +1,2 @@
 # All-in-one-AI-window
-an amazing AI
+An amazing AI chat client.
