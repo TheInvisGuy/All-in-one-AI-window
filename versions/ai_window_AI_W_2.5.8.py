@@ -2516,8 +2516,7 @@ class AIWindow:
         self.root.after(400, self.quit_app)
 
     def _refresh_update_row(self):
-        """(Re)draw the update area at the top of the slots menu, if that menu is open.
-        Layout: two columns - text / drop-down on the left, buttons (all the same width) on the right."""
+        """(Re)draw the update line at the top of the slots menu, if that menu is open."""
         row = self._update_row
         if not row:
             return
@@ -2528,54 +2527,42 @@ class AIWindow:
                 return
             for child in frame.winfo_children():
                 child.destroy()
-            frame.grid_columnconfigure(0, weight=1)
             state, text = self.update_state, self.update_text
-            BTN_W = 20  # every button on the right is this wide (in characters), so they line up
-            r = 0
 
-            def side_button(row_i, label_text, command, enabled=True):
-                tk.Button(frame, text=label_text, width=BTN_W, bg=MENU_BUTTON, fg=MENU_FG,
-                          activebackground=MENU_BUTTON_ACTIVE, activeforeground=MENU_FG, relief="flat",
-                          pady=S(3), state="normal" if enabled else "disabled",
-                          command=command).grid(row=row_i, column=1, sticky="e", padx=(S(8), 0), pady=S(2))
+            def small_button(label_text, command):
+                tk.Button(frame, text=label_text, bg=MENU_BUTTON, fg=MENU_FG, activebackground=MENU_BUTTON_ACTIVE,
+                          activeforeground=MENU_FG, relief="flat", padx=S(10), command=command).pack(side="right")
 
             if state == "available":
                 info = self.update_info or {}
                 tk.Button(frame, text=f"\u2B06  Update available: {info.get('version', '')}  -  click to update",
                           bg="#1f9d55", fg="#ffffff", activebackground="#27b866", activeforeground="#ffffff",
-                          relief="flat", pady=S(6), command=self.install_update_async
-                          ).grid(row=r, column=0, columnspan=2, sticky="ew", pady=S(2))
-                r += 1
+                          relief="flat", pady=S(5), command=self.install_update_async).pack(fill="x")
                 note = info.get("notes") or ""
                 if text or note:
                     tk.Label(frame, text=text or note, bg=MENU_BG, fg=MENU_ERR if text else MENU_HINT,
-                             font=("Sans", 8), anchor="w", justify="left", wraplength=S(520)
-                             ).grid(row=r, column=0, columnspan=2, sticky="w")
-                    r += 1
+                             font=("Sans", 8), anchor="w", justify="left", wraplength=S(430)).pack(fill="x", pady=(S(3), 0))
             else:
                 shown = text or f"Version {VERSION}"
                 tk.Label(frame, text=shown, bg=MENU_BG, fg=MENU_ERR if state == "error" else MENU_HINT,
-                         font=("Sans", 9), anchor="w", justify="left", wraplength=S(330)
-                         ).grid(row=r, column=0, sticky="w")
+                         font=("Sans", 8), anchor="w", justify="left", wraplength=S(330)).pack(side="left")
                 if state in ("idle", "uptodate"):
-                    side_button(r, "Check for updates", self.check_update_async)
+                    small_button("Check for updates", self.check_update_async)
                 elif state == "error":
-                    side_button(r, "Try again", self.check_update_async)
-                r += 1
+                    small_button("Try again", self.check_update_async)
 
             # the version picker: install ANY version the update address lists (newer or older)
             if self.update_versions and state in ("available", "uptodate", "error"):
                 names = [v["version"] for v in self.update_versions]
                 if self.update_pick not in names:
                     self.update_pick = VERSION if VERSION in names else names[0]
-                tk.Frame(frame, bg=MENU_BUTTON, height=1).grid(row=r, column=0, columnspan=2, sticky="ew",
-                                                                  pady=(S(6), S(6)))
-                r += 1
                 pick = tk.Frame(frame, bg=MENU_BG)
-                pick.grid(row=r, column=0, sticky="ew")
-                tk.Label(pick, text="Choose version:", bg=MENU_BG, fg=MENU_FG, font=("Sans", 9)
-                         ).pack(side="left")
+                pick.pack(fill="x", pady=(S(6), 0))
+                tk.Label(pick, text="Choose version:", bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8)).pack(side="left")
                 var = tk.StringVar(value=self.update_pick)
+
+                def labelled(name):
+                    return f"{name}  (installed)" if name == VERSION else name
 
                 def on_pick(name):
                     self.update_pick = name
@@ -2583,22 +2570,22 @@ class AIWindow:
 
                 menu = tk.OptionMenu(pick, var, *names, command=on_pick)
                 menu.config(bg=MENU_BUTTON, fg=MENU_FG, activebackground=MENU_BUTTON_ACTIVE, activeforeground=MENU_FG,
-                            relief="flat", highlightthickness=0, anchor="w")
+                            relief="flat", highlightthickness=0, width=14)
                 menu["menu"].config(bg=MENU_BUTTON, fg=MENU_FG, activebackground=MENU_BUTTON_ACTIVE,
                                     activeforeground=MENU_FG)
                 for i, name in enumerate(names):
-                    menu["menu"].entryconfigure(i, label=f"{name}  (installed)" if name == VERSION else name)
-                menu.pack(side="left", fill="x", expand=True, padx=(S(8), 0))
+                    menu["menu"].entryconfigure(i, label=labelled(name))
+                menu.pack(side="left", padx=S(6))
                 chosen = next(v for v in self.update_versions if v["version"] == self.update_pick)
                 same = chosen["version"] == VERSION
                 older = version_tuple(chosen["version"]) < version_tuple(VERSION)
-                side_button(r, "Already installed" if same else ("Install older version" if older else "Install"),
-                            self.install_picked_version, enabled=not same)
-                r += 1
+                tk.Button(pick, text="Already installed" if same else ("Install older version" if older else "Install"),
+                          bg=MENU_BUTTON, fg=MENU_FG, activebackground=MENU_BUTTON_ACTIVE, activeforeground=MENU_FG,
+                          relief="flat", padx=S(10), state="disabled" if same else "normal",
+                          command=self.install_picked_version).pack(side="right")
                 if chosen.get("notes"):
                     tk.Label(frame, text=chosen["notes"], bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w",
-                             justify="left", wraplength=S(520)).grid(row=r, column=0, columnspan=2, sticky="w",
-                                                                     pady=(S(3), 0))
+                             justify="left", wraplength=S(430)).pack(fill="x", pady=(S(3), 0))
         except tk.TclError:
             self._update_row = None
 
@@ -2653,7 +2640,7 @@ class AIWindow:
         if self.slots_win is not None and self.slots_win.winfo_exists():
             self.slots_win.lift()
             return
-        win = self._popup(600, 740)
+        win = self._popup(470, 580)
         self.slots_win = win
         self._menu_styles(win)
         self._drag_bar(win, "Save slots")
@@ -2661,7 +2648,7 @@ class AIWindow:
 
         if self._update_url():  # the update line (only when an update address is set)
             upd = tk.Frame(win, bg=MENU_BG)
-            upd.pack(side="top", fill="x", padx=S(14), pady=(S(10), S(2)))
+            upd.pack(side="top", fill="x", padx=S(10), pady=(S(8), 0))
             self._update_row = (win, upd)
             if self.update_state == "idle" or (self.update_state in ("uptodate", "error")
                                                and time.time() - self.update_checked_at > 3600):
@@ -2672,16 +2659,13 @@ class AIWindow:
         tk.Label(win, text=f"Made by Invis  \u00b7  {VERSION}", bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8),
                  anchor="e").pack(side="bottom", fill="x", padx=10, pady=(0, S(4)))
         btns = tk.Frame(win, bg=MENU_BG)
-        btns.pack(side="bottom", fill="x", padx=S(14), pady=S(10))
-        for col in range(3):  # three buttons of exactly the same width
-            btns.grid_columnconfigure(col, weight=1, uniform="slot_buttons")
+        btns.pack(side="bottom", pady=S(10))
         tk.Label(win, text="Click a slot to use it. Each slot remembers every setting. "
-                           "Edit: name, description, photo and colors. "
-                           "New slot makes a copy of the slot in use.",
-                 bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), wraplength=S(540),
+                           "Edit: name, description, photo and colors.",
+                 bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), wraplength=S(430),
                  justify="center").pack(side="bottom")
         body = tk.Frame(win, bg=MENU_BG)
-        body.pack(fill="both", expand=True, padx=S(14), pady=(S(8), 0))
+        body.pack(fill="both", expand=True, padx=S(10), pady=(S(8), 0))
         canvas = tk.Canvas(body, bg=MENU_BG, highlightthickness=0, bd=0)
         bar = ttk.Scrollbar(body, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=bar.set)
@@ -2737,12 +2721,12 @@ class AIWindow:
 
         def flat_button(parent, text, command, color=MENU_BUTTON, active=MENU_BUTTON_ACTIVE):
             return tk.Button(parent, text=text, bg=color, fg=MENU_FG, activebackground=active,
-                             activeforeground=MENU_FG, relief="flat", padx=S(12), pady=S(5), command=command)
+                             activeforeground=MENU_FG, relief="flat", padx=S(12), command=command)
 
-        add_btn = flat_button(btns, "+ New slot", add)
-        add_btn.grid(row=0, column=0, sticky="ew", padx=S(4))
-        flat_button(btns, "Settings", lambda: (close(), self.open_settings())).grid(row=0, column=1, sticky="ew", padx=S(4))
-        flat_button(btns, "Close", close).grid(row=0, column=2, sticky="ew", padx=S(4))
+        add_btn = flat_button(btns, "+ New slot (copy of this one)", add)
+        add_btn.pack(side="left", padx=4)
+        flat_button(btns, "Settings", lambda: (close(), self.open_settings())).pack(side="left", padx=4)
+        flat_button(btns, "Close", close).pack(side="left", padx=4)
 
         def render():
             for child in inner.winfo_children():
@@ -2779,23 +2763,22 @@ class AIWindow:
                 clickable.append(name_l)
                 if slot.get("description"):
                     desc_l = tk.Label(text_box, text=slot["description"], bg=bg, fg=fg, font=("Sans", 9),
-                                      anchor="w", justify="left", wraplength=S(300))
+                                      anchor="w", justify="left", wraplength=S(200))
                     desc_l.pack(fill="x")
                     clickable.append(desc_l)
                 model = slot["providers"].get(slot["provider"], {}).get("model", "")
                 info_l = tk.Label(text_box, text=f"{slot['provider']} \u00b7 {model}", bg=bg, fg=sub,
-                                  font=("Sans", 8), anchor="w", justify="left", wraplength=S(300))
+                                  font=("Sans", 8), anchor="w", justify="left", wraplength=S(200))
                 info_l.pack(fill="x")
                 clickable.append(info_l)
                 side = tk.Frame(row, bg=bg)
                 side.pack(side="right", padx=(S(6), 0))
                 tk.Button(side, text="In use" if active else "Use", bg=btn, fg=btn_fg,
                           activebackground=shade(btn, -0.15), activeforeground=btn_fg, relief="flat",
-                          width=8, padx=S(10), pady=S(3), command=lambda i=i: use(i)).pack(fill="x")
+                          padx=S(10), command=lambda i=i: use(i)).pack(fill="x")
                 tk.Button(side, text="Edit", bg=shade(bg, 0.2 if dark else -0.12), fg=fg,
                           activebackground=shade(bg, 0.3 if dark else -0.2), activeforeground=fg,
-                          relief="flat", width=8, padx=S(10), pady=S(3),
-                          command=lambda i=i: edit(i)).pack(fill="x", pady=(S(4), 0))
+                          relief="flat", padx=S(10), command=lambda i=i: edit(i)).pack(fill="x", pady=(S(4), 0))
                 for w in clickable:
                     w.bind("<Button-1>", lambda _e, i=i: use(i))
             add_btn.config(state="disabled" if len(self.cfg["slots"]) >= MAX_SLOTS else "normal")
