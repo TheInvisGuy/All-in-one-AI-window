@@ -22,7 +22,7 @@ How it works (why it works everywhere):
 
 IMPORTANT: while this script runs, Shift+Z/C/X/V/B/M/L are "eaten" by it, so you
 cannot type capital Z, C, X, V, B, M or L with Shift in OTHER apps. (Inside the AI window
-most hotkeys are paused by default so you can type there; Shift+Z still works.) Use Caps Lock for those letters,
+most hotkeys are paused while the cursor is in its text boxes; Shift+Z still works.) Use Caps Lock for those letters,
 or change MODIFIERS below (for example {"shift", "alt"}).
 
 Setup: see the README text in the chat (apt packages + input/uinput permissions).
@@ -245,7 +245,7 @@ DEFAULTS = {
     "ui_scale": "auto",           # interface size: auto, or 100% ... 300% (for high-resolution screens)
 }
 
-VERSION = "AI_W_2.4.6"
+VERSION = "AI_W_2.4.7"
 
 # ---------------------------------------------------------------------------
 # Updates. The program can look for a newer version and install it from a button in the Shift+M menu.
@@ -1157,7 +1157,7 @@ class HotkeyEngine:
         self.devices = []
         self.injector = None
         self.lock = threading.Lock()
-        self.paused = False  # True while the AI window has focus (lets you type capitals in it)
+        self.paused = False  # True while you are typing in one of our text boxes (lets you type capitals)
         self.always_on = set()  # hotkey codes that still work while paused (the Z toggle)
         self.typing_cancel = threading.Event()
 
@@ -1323,6 +1323,7 @@ class AIWindow:
         self.settings_win = None
         self.slots_win = None        # the save-slots menu (Shift+M)
         self.slot_edit_win = None    # the editor for one slot
+        self._open_popups = set()    # menu windows that are open right now
         self._slots_close = None     # functions that close the three menus above (None = not open)
         self._edit_cancel = None
         self._settings_save = None
@@ -1379,7 +1380,6 @@ class AIWindow:
             w.bind("<ButtonRelease-1>", self._drag_end)
         self.chat.bind("<ButtonRelease-1>",
                        lambda ev: None if self.chat.tag_ranges("sel") else self.entry.focus_set())
-        self.root.bind("<FocusIn>", lambda ev: self.entry.focus_set() if ev.widget is self.root else None)
         self.root.bind("<Escape>", lambda ev: self.hide())
 
         self.append("sys", f"{label('ask')} ask about highlighted text · {label('screenshot')} / {label('screenshot2')} screenshot · "
@@ -1434,9 +1434,28 @@ class AIWindow:
         """Run fn(*args) on the Tk main thread (safe to call from any thread)."""
         self.q.put((fn, args))
 
+    def _typing_here(self):
+        """True while the keyboard focus is in a text box of this program (the chat box, or a field in a
+        menu). Only then are the hotkeys paused, so capital letters can be typed there. Having the
+        window merely 'in front' (for example right after a menu closed) does NOT pause them."""
+        try:
+            w = self.root.focus_get()  # None when another program has the keyboard
+        except Exception:  # noqa: BLE001  (Tk can raise KeyError for pop-down lists)
+            return False
+        return isinstance(w, (tk.Entry, tk.Text, tk.Spinbox, ttk.Entry, ttk.Spinbox, ttk.Combobox))
+
+    def _menu_closed(self):
+        """A menu was closed: take the cursor out of the chat box, so the hotkeys work again."""
+        if self._open_popups:
+            return  # another menu is open (e.g. slots menu -> editor)
+        try:
+            self.root.focus_set()
+        except tk.TclError:
+            pass
+
     def _poll(self):
         try:
-            self.has_focus = self.root.focus_displayof() is not None
+            self.has_focus = self._typing_here()  # True = the cursor is in one of our text boxes
         except tk.TclError:
             self.has_focus = False
         eng = getattr(self, "engine", None)
@@ -1615,6 +1634,17 @@ class AIWindow:
         w = min(S(width), max(300, sw - 20))
         h = min(S(height), max(300, sh - 80))
         win.geometry(f"{w}x{h}+{max(0, (sw - w) // 2)}+{max(0, (sh - h) // 2)}")
+        self._open_popups.add(win)
+
+        def on_destroy(ev, win=win):
+            if ev.widget is win:  # (the event also fires for every widget inside the menu)
+                self._open_popups.discard(win)
+                try:
+                    self.root.after(80, self._menu_closed)
+                except tk.TclError:
+                    pass
+
+        win.bind("<Destroy>", on_destroy)
         return win
 
     def _drag_bar(self, win, text):
@@ -1751,7 +1781,6 @@ class AIWindow:
             self._reshow()
 
     def _drag_start(self, ev):
-        self.entry.focus_set()
         self._drag = (ev.x_root - self.root.winfo_x(), ev.y_root - self.root.winfo_y(), False)
 
     def _drag_move(self, ev):
@@ -1782,8 +1811,7 @@ class AIWindow:
     def show(self):
         self.show_no_focus()
         try:
-            self.root.focus_force()
-            self.entry.focus_set()
+            self.root.focus_force()  # (the cursor is NOT put in the chat box: click it to type)
         except tk.TclError:
             pass
 
@@ -3307,7 +3335,7 @@ class AIWindow:
         ttk.Label(t_type, text="Delay between letters (s)", style="S.TLabel").grid(row=2, column=0, sticky="w", pady=4)
         ttk.Spinbox(t_type, from_=0.0, to=5.0, increment=0.01, format="%.2f",
                     textvariable=delay_var, width=12).grid(row=2, column=1, sticky="w", pady=4)
-        ttk.Checkbutton(t_type, text="Pause hotkeys while this window has focus\n"
+        ttk.Checkbutton(t_type, text="Pause hotkeys while you type in this window\n"
                                      "(lets you type capitals; the open/close key still works)",
                         variable=pause_var, style="S.TCheckbutton").grid(row=3, column=0, columnspan=2,
                                                                           sticky="w", pady=(10, 4))
