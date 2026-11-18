@@ -245,7 +245,7 @@ DEFAULTS = {
     "ui_scale": "auto",           # interface size: auto, or 100% ... 300% (for high-resolution screens)
 }
 
-VERSION = "AI_W_2.4.7"
+VERSION = "AI_W_2.5.8"
 
 # ---------------------------------------------------------------------------
 # Updates. The program can look for a newer version and install it from a button in the Shift+M menu.
@@ -253,34 +253,56 @@ VERSION = "AI_W_2.4.7"
 # ---------------------------------------------------------------------------
 UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/TheInvisGuy/All-in-one-AI-window/main/version.json"
 UPDATE_FILE = "ai_window_update.py"  # the packaged program keeps a downloaded update next to itself under this name
+PIN_FILE = "ai_window_update.pin"    # packaged program: says "run the file above even if it is OLDER" (see below)
 VERSION_RE = re.compile(r'^VERSION = "(AI_W_[0-9][0-9.]*)"', re.M)
+# The version built into the packaged program. When the program runs a downloaded ai_window_update.py instead,
+# VERSION above is that file's version, so the packaged program passes its own version on in this variable.
+BUILTIN_VERSION = os.environ.get("AIW_BUILTIN_VERSION") or VERSION
 
 
 def version_tuple(text):
-    """'AI_W_2.4.5' -> (2, 4, 5), so versions can be compared."""
+    """'AI_W_2.5.8' -> (2, 5, 8), so versions can be compared."""
     nums = re.findall(r"\d+", str(text))
     return tuple(int(n) for n in nums) or (0,)
 
 
+def _valid_release(entry):
+    """One entry of the manifest (version / url / sha256 / notes), or None if it looks wrong."""
+    try:
+        version = str(entry.get("version", ""))
+        url = str(entry.get("url", ""))
+        sha = str(entry.get("sha256", "")).lower()
+    except AttributeError:
+        return None
+    if (not re.fullmatch(r"AI_W_\d+(\.\d+)*", version) or not url.startswith("https://")
+            or not re.fullmatch(r"[0-9a-f]{64}", sha)):
+        return None
+    return {"version": version, "url": url, "sha256": sha, "notes": str(entry.get("notes", ""))[:300]}
+
+
 def fetch_update_info(manifest_url):
-    """Ask the update address for the newest version (runs in a background thread).
-    Returns a dict: state is 'available', 'uptodate' or 'error', plus a message."""
+    """Ask the update address for the newest version and the list of all versions (runs in a background
+    thread). Returns a dict: state is 'available', 'uptodate' or 'error', plus a message, plus 'versions'
+    (every version you can install, newest first)."""
     try:
         resp = requests.get(manifest_url, timeout=8, headers={"Cache-Control": "no-cache"})
         resp.raise_for_status()
         data = resp.json()
-        version = str(data.get("version", ""))
-        url = str(data.get("url", ""))
-        sha = str(data.get("sha256", "")).lower()
+        latest = _valid_release(data)
+        extra = [_valid_release(item) for item in (data.get("versions") or [])]
     except Exception as err:  # noqa: BLE001  (no internet, bad answer, ...)
         return {"state": "error", "message": f"Could not check for updates ({err.__class__.__name__})."}
-    if (not re.fullmatch(r"AI_W_\d+(\.\d+)*", version) or not url.startswith("https://")
-            or not re.fullmatch(r"[0-9a-f]{64}", sha)):
+    if latest is None:
         return {"state": "error", "message": "The update information is not valid, so it was ignored."}
-    if version_tuple(version) <= version_tuple(VERSION):
-        return {"state": "uptodate", "message": f"{VERSION}: you have the newest version."}
-    return {"state": "available", "version": version, "url": url, "sha256": sha,
-            "notes": str(data.get("notes", ""))[:300], "message": ""}
+    releases = {latest["version"]: latest}  # the main entry first, so it wins if a version is listed twice
+    for item in extra:
+        if item and item["version"] not in releases:
+            releases[item["version"]] = item
+    versions = sorted(releases.values(), key=lambda r: version_tuple(r["version"]), reverse=True)
+    if version_tuple(latest["version"]) <= version_tuple(VERSION):
+        return {"state": "uptodate", "message": f"{VERSION}: you have the newest version.", "versions": versions}
+    return {"state": "available", "version": latest["version"], "url": latest["url"], "sha256": latest["sha256"],
+            "notes": latest["notes"], "message": "", "versions": versions}
 
 
 def download_update(info):
@@ -313,11 +335,22 @@ def download_update(info):
     return raw
 
 
-def install_update(raw):
-    """Store the new program. A plain ai_window.py is replaced (the old one is kept as .bak); the packaged
-    program can't change its own code, so the update goes next to it as ai_window_update.py instead."""
+def install_update(raw, version=""):
+    """Store the chosen program version. A plain ai_window.py is replaced (the old one is kept as .bak); the
+    packaged program can't change its own code, so it goes next to it as ai_window_update.py instead.
+    (If that version is OLDER than the one built into the program, a small .pin file tells the program to
+    run it anyway.)"""
     if getattr(sys, "frozen", False):
         target = os.path.join(_APP_DIR, UPDATE_FILE)
+        pin = os.path.join(_APP_DIR, PIN_FILE)
+        try:
+            if version and version_tuple(version) <= version_tuple(BUILTIN_VERSION):
+                with open(pin, "w", encoding="utf-8") as f:
+                    f.write(f"{BUILTIN_VERSION}\n{version}\n")  # built-in version, chosen version
+            elif os.path.exists(pin):
+                os.remove(pin)
+        except OSError:
+            pass
     else:
         target = os.path.abspath(__file__)
         try:
@@ -342,9 +375,20 @@ def run_downloaded_update_if_newer():
             found = VERSION_RE.search(f.read())
     except (OSError, UnicodeDecodeError):
         return
-    if not found or version_tuple(found.group(1)) <= version_tuple(VERSION):
-        return  # not newer than what is built in (e.g. after rebuilding the program)
+    if not found:
+        return
+    if version_tuple(found.group(1)) <= version_tuple(VERSION):
+        # Not newer than what is built in (e.g. after rebuilding the program) - unless you picked this older
+        # version on purpose. The pin only counts for the exact program it was made for.
+        try:
+            with open(os.path.join(_APP_DIR, PIN_FILE), "r", encoding="utf-8") as f:
+                pinned = f.read().split()
+        except OSError:
+            return
+        if pinned != [VERSION, found.group(1)]:
+            return
     os.environ["AIW_RUNNING_UPDATE"] = "1"
+    os.environ["AIW_BUILTIN_VERSION"] = VERSION  # (so the update knows which version is built in)
     import runpy
     try:
         runpy.run_path(path, run_name="__main__")
@@ -357,6 +401,7 @@ def run_downloaded_update_if_newer():
         except OSError:
             pass
         os.environ.pop("AIW_RUNNING_UPDATE", None)
+        os.environ.pop("AIW_BUILTIN_VERSION", None)
         return
     sys.exit(0)
 
@@ -1331,6 +1376,8 @@ class AIWindow:
         self.pirate = None       # the pirate at the bottom of the screen (None = not shown)
         self.update_state = "idle"   # idle / checking / uptodate / available / installing / installed / error
         self.update_info = None      # what the update address said about the newest version
+        self.update_versions = []    # every version the update address offers (newest first)
+        self.update_pick = ""        # the version chosen in the version picker
         self.update_text = ""        # message shown in the menu
         self.update_checked_at = 0.0
         self._update_announced = ""
@@ -2404,6 +2451,8 @@ class AIWindow:
         self.update_checked_at = time.time()
         self.update_state = info["state"]
         self.update_info = info if info["state"] == "available" else None
+        if info["state"] != "error":
+            self.update_versions = info.get("versions", [])
         self.update_text = info.get("message", "")
         if info["state"] == "available" and self._update_announced != info["version"]:
             self._update_announced = info["version"]
@@ -2411,16 +2460,17 @@ class AIWindow:
                                f"click the Update button.\n\n")
         self._refresh_update_row()
 
-    def install_update_async(self):
-        info = self.update_info
-        if not info or self.update_state != "available":
+    def install_update_async(self, info=None):
+        """Download and install a version: the newest one (no argument) or the one picked in the picker."""
+        info = info or self.update_info
+        if not info or self.update_state not in ("available", "uptodate", "error"):
             return
         self.update_state, self.update_text = "installing", f"Downloading {info['version']}..."
         self._refresh_update_row()
 
         def work():
             try:
-                install_update(download_update(info))
+                install_update(download_update(info), info["version"])
             except RuntimeError as err:
                 self.ui(self._update_failed, str(err))
             except OSError as err:
@@ -2430,12 +2480,19 @@ class AIWindow:
 
         threading.Thread(target=work, daemon=True).start()
 
+    def install_picked_version(self):
+        info = next((v for v in self.update_versions if v["version"] == self.update_pick), None)
+        if info:
+            self.install_update_async(info)
+
     def _update_failed(self, message):
-        self.update_state, self.update_text = "available", message
+        self.update_state = "available" if self.update_info else "uptodate"
+        self.update_text = message
         self._refresh_update_row()
 
     def _update_installed(self, version):
-        self.update_state, self.update_text = "installed", f"Updated to {version}. Restarting..."
+        verb = "Updated" if version_tuple(version) > version_tuple(VERSION) else "Switched"
+        self.update_state, self.update_text = "installed", f"{verb} to {version}. Restarting..."
         self._refresh_update_row()
         self.root.after(900, self._restart)
 
@@ -2447,6 +2504,7 @@ class AIWindow:
                 env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"  # the new copy unpacks itself fresh
                 env.pop("_MEIPASS2", None)
                 env.pop("AIW_RUNNING_UPDATE", None)
+                env.pop("AIW_BUILTIN_VERSION", None)
                 subprocess.Popen([sys.executable] + sys.argv[1:], env=env, start_new_session=True, close_fds=True)
             else:
                 subprocess.Popen([sys.executable, os.path.abspath(__file__)] + sys.argv[1:],
@@ -2492,6 +2550,42 @@ class AIWindow:
                     small_button("Check for updates", self.check_update_async)
                 elif state == "error":
                     small_button("Try again", self.check_update_async)
+
+            # the version picker: install ANY version the update address lists (newer or older)
+            if self.update_versions and state in ("available", "uptodate", "error"):
+                names = [v["version"] for v in self.update_versions]
+                if self.update_pick not in names:
+                    self.update_pick = VERSION if VERSION in names else names[0]
+                pick = tk.Frame(frame, bg=MENU_BG)
+                pick.pack(fill="x", pady=(S(6), 0))
+                tk.Label(pick, text="Choose version:", bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8)).pack(side="left")
+                var = tk.StringVar(value=self.update_pick)
+
+                def labelled(name):
+                    return f"{name}  (installed)" if name == VERSION else name
+
+                def on_pick(name):
+                    self.update_pick = name
+                    self.root.after(10, self._refresh_update_row)  # redraw after the drop-down has closed
+
+                menu = tk.OptionMenu(pick, var, *names, command=on_pick)
+                menu.config(bg=MENU_BUTTON, fg=MENU_FG, activebackground=MENU_BUTTON_ACTIVE, activeforeground=MENU_FG,
+                            relief="flat", highlightthickness=0, width=14)
+                menu["menu"].config(bg=MENU_BUTTON, fg=MENU_FG, activebackground=MENU_BUTTON_ACTIVE,
+                                    activeforeground=MENU_FG)
+                for i, name in enumerate(names):
+                    menu["menu"].entryconfigure(i, label=labelled(name))
+                menu.pack(side="left", padx=S(6))
+                chosen = next(v for v in self.update_versions if v["version"] == self.update_pick)
+                same = chosen["version"] == VERSION
+                older = version_tuple(chosen["version"]) < version_tuple(VERSION)
+                tk.Button(pick, text="Already installed" if same else ("Install older version" if older else "Install"),
+                          bg=MENU_BUTTON, fg=MENU_FG, activebackground=MENU_BUTTON_ACTIVE, activeforeground=MENU_FG,
+                          relief="flat", padx=S(10), state="disabled" if same else "normal",
+                          command=self.install_picked_version).pack(side="right")
+                if chosen.get("notes"):
+                    tk.Label(frame, text=chosen["notes"], bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w",
+                             justify="left", wraplength=S(430)).pack(fill="x", pady=(S(3), 0))
         except tk.TclError:
             self._update_row = None
 
