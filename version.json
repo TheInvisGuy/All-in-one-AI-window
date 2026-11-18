@@ -1,13 +1,13 @@
 {
   "version": "AI_W_2.5.8",
   "url": "https://raw.githubusercontent.com/TheInvisGuy/All-in-one-AI-window/main/ai_window.py",
-  "sha256": "479940037f746024aaaa424b1a5792ad714a661ea4376520a230346da2a8a349",
+  "sha256": "afec9f461f5725f759f9faed713484925b02dfd84c5c542eff6f8a77ae8afdb0",
   "notes": "Version picker: choose and install any version (newer or older) from the Shift+M menu",
   "versions": [
     {
       "version": "AI_W_2.5.8",
       "url": "https://raw.githubusercontent.com/TheInvisGuy/All-in-one-AI-window/main/versions/ai_window_AI_W_2.5.8.py",
-      "sha256": "479940037f746024aaaa424b1a5792ad714a661ea4376520a230346da2a8a349",
+      "sha256": "afec9f461f5725f759f9faed713484925b02dfd84c5c542eff6f8a77ae8afdb0",
       "notes": "Version picker: choose and install any version (newer or older) from the Shift+M menu"
     },
     {
