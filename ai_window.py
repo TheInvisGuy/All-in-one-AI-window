@@ -186,7 +186,7 @@ PERSONAS = {
 
 # Theme presets: (background, top bar, send button)
 THEMES = {
-    "Default purple": ("#1e1f24", "#8b00f5", "#8b00f5"),
+    "Default purple": ("#1e1f24", "#5e00f5", "#5e00f5"),
     "Hacker green": ("#0b0f0b", "#00a844", "#00a844"),
     "Synthwave": ("#1a1030", "#ff2e97", "#00b8d9"),
     "Ocean": ("#0d1b2a", "#1b6ca8", "#2a9d8f"),
@@ -206,8 +206,8 @@ DEFAULTS = {
     "providers": {n: {"api_key": "", "model": i["model"]} for n, i in PROVIDERS.items()},
     "title": "AI Assistant",
     "bg_color": "#1e1f24",
-    "header_color": "#8B00F5",    # the bar at the top
-    "button_color": "#8B00F5",    # the Send button
+    "header_color": "#5E00F5",    # the bar at the top
+    "button_color": "#5E00F5",    # the Send button
     "keys": dict(DEFAULT_KEYS),
     "modifiers": list(DEFAULT_MODIFIERS),
     "pause_when_focused": True,   # let you type capitals inside the AI window
@@ -242,10 +242,22 @@ DEFAULTS = {
     "pirate_size": 180,           # ... how big it is (pixels, longer side)
     "pirate_side": "Right",       # ... where along the bottom: Left / Middle / Right
     "pirate_lift": 0,             # ... how far above the bottom edge (pixels), e.g. to clear a taskbar
+    "outline_enabled": True,      # a colored outline around the window, its text boxes and the menus
+    "outline_color": "",                # "" = the same color as the top bar (it follows it); or your own #RRGGBB
+    "outline_width": 2,           # thickness in pixels (1 - 6)
+    "anim_open": "Fade",   # how the AI window appears (see ANIM_KINDS)
+    "anim_close": "None",             # how the AI window goes away
+    "anim_ease": "Sine",              # the speed curve of the animation (see EASINGS)
+    "anim_ms": 450,                   # how long it takes (milliseconds)
+    "anim_menus": True,               # the menus appear with the same animation
+    "smoke_speed": 60,                # speed of the menu smoke (percent)
+    "menu_smoke": True,           # menus: moving purple smoke with glass panels (off = plain #3D00A0)
+    "open_on_start": True,        # open the AI window as soon as the program starts
+    "screenshot_no_open": False,  # True = the AI window never opens by itself after a screenshot
     "ui_scale": "auto",           # interface size: auto, or 100% ... 300% (for high-resolution screens)
 }
 
-VERSION = "AI_W_2.6"
+VERSION = "AI_W_2.7"
 
 # ---------------------------------------------------------------------------
 # Updates. The program can look for a newer version and install it from a button in the Shift+M menu.
@@ -280,6 +292,9 @@ def _valid_release(entry):
     return {"version": version, "url": url, "sha256": sha, "notes": str(entry.get("notes", ""))[:300]}
 
 
+MIN_VERSION = (2, 6)   # older versions are not offered any more
+
+
 def fetch_update_info(manifest_url):
     """Ask the update address for the newest version and the list of all versions (runs in a background
     thread). Returns a dict: state is 'available', 'uptodate' or 'error', plus a message, plus 'versions'
@@ -298,7 +313,8 @@ def fetch_update_info(manifest_url):
     for item in extra:
         if item and item["version"] not in releases:
             releases[item["version"]] = item
-    versions = sorted(releases.values(), key=lambda r: version_tuple(r["version"]), reverse=True)
+    versions = sorted((r for r in releases.values() if version_tuple(r["version"]) >= MIN_VERSION),
+                      key=lambda r: version_tuple(r["version"]), reverse=True)
     if version_tuple(latest["version"]) <= version_tuple(VERSION):
         return {"state": "uptodate", "message": f"{VERSION}: you have the newest version.", "versions": versions}
     return {"state": "available", "version": latest["version"], "url": latest["url"], "sha256": latest["sha256"],
@@ -533,13 +549,46 @@ def _clean_slots(raw, cfg):
 
 
 BG, FG, ACCENT, INPUT_BG = "#1e1f24", "#e8e8ea", "#7c5cff", "#2a2c33"
-# Settings-menu theme (Shift+M): deep purple background, bright purple buttons
-MENU_BG = "#8400DB"           # the menu background
+# Settings-menu theme (Shift+M). Two looks, picked by "Animated smoke background":
+#   smoke ON  -> "glass": soft violet panels with a faint outline floating over the moving smoke
+#   smoke OFF -> plain #3D00A0 everywhere: no panels, no outlines, buttons a little lighter than the background
+MENU_SOLID = "#3D00A0"        # the plain background when the smoke is off (a little darker)
 MENU_FG = "#ffffff"
-MENU_BUTTON = "#52008F"       # buttons and the top strip: a deeper purple so they stand out on the background
-MENU_BUTTON_ACTIVE = "#A23CFF"  # button while hovered / pressed
-MENU_TAB = "#6A00B3"          # tabs that are not selected, scrollbar track
-MENU_HINT = "#ead9fb"         # small help texts (light purple, readable on the background)
+_MENU_THEMES = {
+    True: {
+        "MENU_BG": "#33207a",             # glass panels (a tint, not black)
+        "MENU_EDGE": "#5a46a0",           # their faint outline
+        "MENU_FIELD": "#281862",          # text boxes: the plate color, a little darker
+        "MENU_TAB": "#46309a",            # tabs that are not selected, scrollbar track
+        "MENU_BUTTON": "#5E00F5",         # buttons and the top strip
+        "MENU_BUTTON_ACTIVE": "#8F4DFF",  # button while hovered / pressed
+        "MENU_HINT": "#d6c6ff",           # small help texts
+    },
+    False: {
+        "MENU_BG": MENU_SOLID,            # same as the backdrop = no visible panels
+        "MENU_EDGE": MENU_SOLID,          # same as the backdrop = no outlines
+        "MENU_FIELD": "#32008a",          # text boxes: the background color, a little darker
+        "MENU_TAB": "#5422be",            # tabs that are not selected: clearly lighter than the background
+        "MENU_BUTTON": "#7c4dff",         # bright buttons / selected tab, they stand out from the dark background
+        "MENU_BUTTON_ACTIVE": "#9b72ff",
+        "MENU_HINT": "#e0d4ff",
+    },
+}
+_MENU_THEME_KEYS = tuple(_MENU_THEMES[True])
+
+
+def set_menu_theme(smoke_on):
+    """Switch the menu colors to the glass look (smoke on) or the plain #3D00A0 look (smoke off)."""
+    globals().update(_MENU_THEMES[bool(smoke_on)])
+
+
+def menu_theme_values():
+    g = globals()
+    return {k: g[k] for k in _MENU_THEME_KEYS}
+
+
+set_menu_theme(True)
+SMOKE_PURPLE = (0x5E, 0x00, 0xF5)  # the smoke color; with smoke off the menu backdrop is plain #3D00A0
 MENU_ERR = "#ffc2cc"          # error messages
 MENU_QUIT = "#b3263e"         # 'Quit app' stays red on purpose (it is the destructive button)
 TYPE_DELAY = 0.05  # seconds between typed letters (Shift+B)
@@ -549,6 +598,407 @@ HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 INLINE_RE = re.compile(r"(\*\*\*[^*\n]+?\*\*\*|\*\*[^*\n]+?\*\*|`[^`\n]+`"
                        r"|(?<![\w*])\*[^*\s][^*\n]*?(?<!\s)\*(?![\w*]))")
 LINK_RE = re.compile(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)")
+
+
+# ---------------------------------------------------------------------------
+# Window animations: how the AI window and the menus appear / disappear.
+# ---------------------------------------------------------------------------
+def _ease_bounce(t):
+    n1, d1 = 7.5625, 2.75
+    if t < 1 / d1:
+        return n1 * t * t
+    if t < 2 / d1:
+        t -= 1.5 / d1
+        return n1 * t * t + 0.75
+    if t < 2.5 / d1:
+        t -= 2.25 / d1
+        return n1 * t * t + 0.9375
+    t -= 2.625 / d1
+    return n1 * t * t + 0.984375
+
+
+def _ease_elastic(t):
+    if t <= 0 or t >= 1:
+        return min(1.0, max(0.0, t))
+    return 2 ** (-10 * t) * math.sin((t * 10 - 0.75) * (2 * math.pi / 3)) + 1
+
+
+EASINGS = {
+    "Sine": lambda t: math.sin(t * math.pi / 2),
+    "Ease out": lambda t: 1 - (1 - t) ** 3,
+    "Ease in": lambda t: t ** 3,
+    "Ease in-out": lambda t: -(math.cos(math.pi * t) - 1) / 2,
+    "Linear": lambda t: t,
+    "Back (overshoot)": lambda t: 1 + 2.70158 * (t - 1) ** 3 + 1.70158 * (t - 1) ** 2,
+    "Bounce": _ease_bounce,
+    "Elastic": _ease_elastic,
+}
+# fade: change transparency, dx / dy: slide in from that side (+1 = right / bottom), scale: grow from the middle
+ANIM_KINDS = {
+    "None": None,
+    "Fade": {"fade": 1},
+    "Fade + slide up": {"fade": 1, "dy": 1},
+    "Fade + slide down": {"fade": 1, "dy": -1},
+    "Slide from left": {"dx": -1},
+    "Slide from right": {"dx": 1},
+    "Slide from top": {"dy": -1},
+    "Slide from bottom": {"dy": 1},
+    "Grow": {"fade": 1, "scale": 1},
+    "Pop": {"scale": 1},
+}
+
+# ---------------------------------------------------------------------------
+# Animated menu background: black with slowly moving purple (#5E00F5) smoke.
+# It sits BEHIND the menu panels (Tk widgets can not be see-through), so it shows in the frame around
+# the panels. Turn it off (Shift+M > Look, or the box in the Shift+M menu) and the backdrop is plain purple.
+# Uses Pillow for a smooth picture when it is installed, otherwise a plain Tk picture (a little blockier).
+# ---------------------------------------------------------------------------
+try:
+    from PIL import Image as _PILImage, ImageTk as _PILImageTk
+except Exception:  # noqa: BLE001
+    _PILImage = _PILImageTk = None
+try:
+    from PIL import ImageFilter as _PILImageFilter, ImageChops as _PILImageChops
+except Exception:  # noqa: BLE001
+    _PILImageFilter = _PILImageChops = None
+SMOKE_SOLID = MENU_SOLID   # backdrop when the smoke is off
+_SMOKE_STEPS = 64
+_SMOKE_LUT = [tuple(int(c * (i / (_SMOKE_STEPS - 1)) ** 1.15) for c in SMOKE_PURPLE) for i in range(_SMOKE_STEPS)]
+_SMOKE_HEX = ["#%02x%02x%02x" % c for c in _SMOKE_LUT]
+# Frosted glass panels (needs Pillow): the smoke is blurred, softened and given a fine grain, then tinted.
+GLASS_ALPHA = 0.25   # how much of the blurred smoke shows through the panels (0 = flat color, 1 = all smoke)
+GLASS_BLUR = 2.0     # blur strength
+_gb = _MENU_THEMES[True]["MENU_BG"]
+GLASS_TINT = tuple(max(0, min(255, int((int(_gb[i:i + 2], 16) - GLASS_ALPHA * m) / (1 - GLASS_ALPHA))))
+                   for i, m in zip((1, 3, 5), (42, 0, 110)))
+
+
+class SmokeLayer:
+    """A picture label that fills a menu window behind everything else and animates the smoke."""
+    FPS_MS = 90
+
+    def __init__(self, app, win):
+        self.app, self.win = app, win
+        self.label = tk.Label(win, bd=0, highlightthickness=0, bg=SMOKE_SOLID)
+        self.label._no_recolor = True
+        pad = S(14)  # (the menu windows have a padding; the picture must cover that too)
+        self.label.place(x=-pad, y=-pad, relwidth=1, relheight=1, width=2 * pad, height=2 * pad)
+        self.label.lower()
+        self.photo = None
+        self.size = (0, 0)
+        self.canvases = []   # scrolling areas that show the smoke too (see attach)
+        self.glass_photo = None   # the blurred, frosted version of the smoke (same size as the window)
+        self.glass_size = (0, 0)
+        self.glass_items = []     # text on glass panels: each shows its own slice of the frosted picture
+        self._glass_on = False
+        self._grain = None
+        self.t = random.random() * 50
+        self.last = time.time()
+        self.running = False
+        self.refresh()
+
+    def enabled(self):
+        return bool(self.app.cfg.get("menu_smoke", True))
+
+    def refresh(self):
+        """Call after the 'smoke' setting changed: starts / stops the animation."""
+        try:
+            if not self.win.winfo_exists():
+                return
+            if self.enabled():
+                if not self.running:
+                    self.running = True
+                    self.last = time.time()
+                    self._tick()
+            else:
+                self.running = False
+                self.label.config(image="", bg=SMOKE_SOLID)
+                self.photo = None
+                self.size = (0, 0)
+                self.glass_photo = None
+                self.glass_size = (0, 0)
+                for rec in self.canvases:
+                    rec["place"]()
+                self._update_glass_items()
+        except tk.TclError:
+            self.running = False
+
+    def attach(self, canvas, yscroll=None):
+        """Let a scrolling area (a Canvas) show the smoke in its empty parts. Returns the function to use
+        as its yscrollcommand (it keeps the picture standing still while the content scrolls)."""
+        rec = {"item": None}
+
+        def place(_e=None):
+            if rec.get("busy"):  # (moving the picture can itself report a scroll change: don't loop)
+                return
+            rec["busy"] = True
+            try:
+                self._place_canvas(canvas, rec)
+            except tk.TclError:
+                pass
+            finally:
+                rec["busy"] = False
+
+        rec["place"] = place
+        self.canvases.append(rec)
+        canvas.bind("<Configure>", place, add="+")
+
+        def scroll_cmd(*args):
+            if yscroll:
+                yscroll(*args)
+            place()
+        place()
+        return scroll_cmd
+
+    def _backdrop(self, frame, glass):
+        """Put a picture of the smoke (glass=False) or of the frosted smoke (glass=True) behind a frame's
+        widgets, lined up with the window so the frame looks see-through."""
+        lbl = tk.Label(frame, bd=0, highlightthickness=0, padx=0, pady=0, anchor="nw", bg=SMOKE_SOLID)
+        lbl._no_recolor = True
+        lbl._backdrop = True
+        lbl.lower()
+
+        def place(_e=None):
+            try:
+                if not frame.winfo_exists():
+                    return
+                photo = self.glass_photo if glass else self.photo
+                size = self.glass_size if glass else self.size
+                lbl.place_forget()
+                if photo is not None and self.enabled():
+                    ox = frame.winfo_rootx() - self.win.winfo_rootx()
+                    oy = frame.winfo_rooty() - self.win.winfo_rooty()
+                    lbl.config(image=photo)
+                    lbl.place(x=-ox, y=-oy, width=size[0], height=size[1])
+                    lbl.lower()
+                elif not glass:
+                    lbl.config(image="", bg=SMOKE_SOLID)
+                    lbl.place(x=0, y=0, relwidth=1, relheight=1)
+                    lbl.lower()
+                # (glass without a picture: nothing is placed, the panel's own tint shows)
+            except tk.TclError:
+                pass
+
+        self.canvases.append({"place": place})
+        frame.bind("<Configure>", place, add="+")
+        place()
+
+    def see_through(self, frame):
+        """Make a frame (for example a row of buttons) truly see-through: no box and no outline around
+        it, the smoke shows between its widgets. With the smoke off it just takes the plain background."""
+        self._backdrop(frame, glass=False)
+
+    def glass_panel(self, root):
+        """Turn a panel and the text on it into frosted glass: you see the blurred smoke through it.
+        (Needs Pillow. Without it, or with the smoke off, the panel keeps its plain tint.)"""
+        if _PILImageTk is None or _PILImageFilter is None:
+            return
+        self._glass_on = True
+        try:
+            self.win.update_idletasks()
+        except tk.TclError:
+            pass
+
+        def is_menu_widget(w):
+            try:
+                cls = w.winfo_class()
+                if cls in ("TFrame", "TLabel"):
+                    return str(w.cget("style")) in ("S.TFrame", "S.TLabel")
+                if cls in ("Frame", "Label"):
+                    return str(w.cget("bg")).lower() == MENU_BG.lower()
+            except tk.TclError:
+                pass
+            return False
+
+        def walk(w):
+            if getattr(w, "_no_recolor", False) or getattr(w, "_backdrop", False):
+                return
+            kids = list(w.winfo_children())
+            if is_menu_widget(w):
+                if w.winfo_class() in ("Frame", "TFrame"):
+                    self._backdrop(w, glass=True)
+                else:
+                    self._glass_label(w)
+            for k in kids:
+                walk(k)
+
+        walk(root)
+
+    def _glass_label(self, w):
+        """Text on a glass panel: its background becomes the matching slice of the frosted picture."""
+        try:
+            rec = {"w": w, "crop": None, "size": None, "skip": False,
+                   "req": (w.winfo_reqwidth(), w.winfo_reqheight())}
+        except tk.TclError:
+            return
+
+        def update():
+            if rec["skip"]:
+                return True
+            try:
+                if not w.winfo_exists():
+                    return False
+                if self.glass_photo is None or not self.enabled():
+                    if rec["crop"] is not None:
+                        w.configure(image="")
+                        rec["crop"] = None
+                    return True
+                if not w.winfo_viewable():
+                    return True
+                ww, hh = w.winfo_width(), w.winfo_height()
+                if ww < 4 or hh < 4:
+                    return True
+                if rec["crop"] is None:
+                    if ww - rec["req"][0] > 6 or hh - rec["req"][1] > 6:
+                        rec["skip"] = True   # stretched wider than its text: leave it with the plain tint
+                        return True
+                    rec["crop"] = tk.PhotoImage(master=self.win, width=ww, height=hh)
+                    rec["size"] = (ww, hh)
+                    w.configure(image=rec["crop"], compound="center")
+                cw_, ch_ = rec["size"]
+                ox = w.winfo_rootx() - self.win.winfo_rootx()
+                oy = w.winfo_rooty() - self.win.winfo_rooty()
+                gw, gh = self.glass_size
+                if ox < 0 or oy < 0 or ox + cw_ > gw or oy + ch_ > gh:
+                    return True
+                rec["crop"].tk.call(rec["crop"], "copy", self.glass_photo,
+                                    "-from", ox, oy, ox + cw_, oy + ch_)
+            except tk.TclError:
+                pass
+            return True
+
+        rec["update"] = update
+        self.glass_items.append(rec)
+
+    def _update_glass_items(self):
+        keep = []
+        for rec in self.glass_items:
+            try:
+                alive = rec["update"]()
+            except Exception:  # noqa: BLE001
+                alive = False
+            if alive:
+                keep.append(rec)
+        self.glass_items = keep
+
+    def _draw_glass(self, small, w, h):
+        """Frosted version of the smoke: blurred, mixed with a tint, plus a fine static grain."""
+        blur = small.filter(_PILImageFilter.GaussianBlur(GLASS_BLUR))
+        tint = _PILImage.new("RGB", small.size, GLASS_TINT)
+        mix = _PILImage.blend(tint, blur, GLASS_ALPHA).resize((w, h), _PILImage.BICUBIC)
+        if _PILImageChops is not None:
+            if self._grain is None or self._grain.size != (w, h):
+                noise = _PILImage.frombytes("L", (w, h), os.urandom(w * h))
+                self._grain = noise.point(lambda v: v >> 5).convert("RGB")
+            mix = _PILImageChops.add(mix, self._grain, 1.0, -4)
+        if self.glass_photo is None or self.glass_size != (w, h):
+            self.glass_photo = _PILImageTk.PhotoImage(mix)
+            self.glass_size = (w, h)
+            for rec in self.canvases:
+                rec["place"]()
+        else:
+            self.glass_photo.paste(mix)
+
+    def _glass_tick(self, small, w, h):
+        if not self._glass_on:
+            return
+        try:
+            self._draw_glass(small, w, h)
+            self._update_glass_items()
+        except Exception:  # noqa: BLE001  (the frosted effect must never stop the smoke)
+            traceback.print_exc()
+            self._glass_on = False
+            self.glass_photo = None
+            self._update_glass_items()
+
+    def _place_canvas(self, canvas, rec):
+        """Put the smoke picture into the canvas so it lines up with the menu window behind it."""
+        if self.photo is None or not self.enabled():
+            if rec["item"] is not None:
+                canvas.delete(rec["item"])
+                rec["item"] = None
+            want = SMOKE_SOLID if not self.enabled() else MENU_BG
+            if str(canvas.cget("bg")).lower() != want.lower():  # (re-setting it would report a scroll change again)
+                canvas.configure(bg=want)
+            return
+        if not str(canvas.cget("scrollregion")):
+            return  # wait until the content has set the scroll area (else the picture would count as content)
+        ox = canvas.winfo_rootx() - self.win.winfo_rootx()
+        oy = canvas.winfo_rooty() - self.win.winfo_rooty()
+        x, y = canvas.canvasx(0) - ox, canvas.canvasy(0) - oy
+        if rec["item"] is None:
+            rec["item"] = canvas.create_image(x, y, image=self.photo, anchor="nw")
+            canvas.tag_lower(rec["item"])
+        elif [round(v) for v in canvas.coords(rec["item"])] != [round(x), round(y)]:
+            canvas.coords(rec["item"], x, y)
+
+    def _tick(self):
+        if not self.running:
+            return
+        try:
+            if not self.win.winfo_exists():
+                self.running = False
+                return
+            if not self.enabled():
+                self.refresh()
+                return
+            if getattr(self.win, "_anim", None):  # a window animation is running: give it all the time
+                self.last = time.time()
+                self.win.after(self.FPS_MS, self._tick)
+                return
+            now = time.time()
+            speed = min(300, max(20, int(self.app.cfg.get("smoke_speed", 100)))) / 100.0
+            self.t += min(0.5, now - self.last) * speed
+            self.last = now
+            w, h = self.win.winfo_width(), self.win.winfo_height()
+            if w > 50 and h > 50 and self.win.winfo_viewable():
+                self._draw(w, h)
+            self.win.after(self.FPS_MS, self._tick)
+        except tk.TclError:
+            self.running = False
+
+    def _draw(self, w, h):
+        cell = 22 if _PILImageTk is not None else 10   # size of one field point in pixels
+        cw, ch = max(4, w // cell + 1), max(4, h // cell + 1)
+        t = self.t
+        sin = math.sin
+        rows = []
+        for j in range(ch):
+            y = j / ch * 3.2
+            row = []
+            for i in range(cw):
+                x = i / cw * 3.2 * (w / h)
+                wx = x + 0.55 * sin(y * 1.7 + t * 0.55)
+                wy = y + 0.55 * sin(x * 1.3 - t * 0.45)
+                v = sin(wx * 2.1 + t * 0.35) + sin(wy * 2.6 - t * 0.5 + wx) + 0.6 * sin((wx + wy) * 3.1 + t * 0.8)
+                v = (v + 2.6) / 5.2                     # 0 .. 1
+                v = min(1.0, max(0.0, (v - 0.30) / 0.55))
+                v = v * v * (3 - 2 * v)                 # smooth edges: wisps with dark gaps between
+                row.append(int(v * (_SMOKE_STEPS - 1)))
+            rows.append(row)
+        new = self.photo is None or self.size != (w, h)
+        small = None
+        if _PILImageTk is not None:
+            small = _PILImage.new("RGB", (cw, ch))
+            small.putdata([_SMOKE_LUT[k] for r in rows for k in r])
+            img = small.resize((w, h), _PILImage.BICUBIC)
+            if new:
+                self.photo = _PILImageTk.PhotoImage(img)
+            else:
+                self.photo.paste(img)
+        else:
+            if new:
+                self.photo = tk.PhotoImage(width=w, height=h)
+            small = tk.PhotoImage(width=cw, height=ch)
+            small.put(" ".join("{" + " ".join(_SMOKE_HEX[k] for k in r) + "}" for r in rows))
+            self.photo.tk.call(self.photo, "copy", small, "-zoom", cell, cell)
+        if new:  # (the same picture object is used everywhere, so updating it updates every place at once)
+            self.size = (w, h)
+            self.label.config(image=self.photo)
+            for rec in self.canvases:
+                rec["place"]()
+        if small is not None:
+            self._glass_tick(small, w, h)
 
 
 def luminance(hex_color):
@@ -589,6 +1039,23 @@ def load_config():
     if cfg["provider"] not in PROVIDERS:
         cfg["provider"] = DEFAULTS["provider"]
     cfg["slots"] = _clean_slots(saved.get("slots"), cfg)
+    for holder in [cfg] + list(cfg["slots"]):  # the old default purple (#8B00F5) becomes the new one (#5E00F5)
+        for key in ("header_color", "button_color"):
+            if str(holder.get(key, "")).lower() == "#8b00f5":
+                holder[key] = "#5E00F5"
+        cc = holder.get("custom_colors")
+        if isinstance(cc, list):
+            holder["custom_colors"] = ["#5e00f5" if str(c).lower() == "#8b00f5" else c for c in cc]
+    for holder in [cfg] + list(cfg["slots"]):  # the first outline default was a fixed light purple: now it follows the top bar
+        if str(holder.get("outline_color", "")).lower() == "#b07cff":
+            holder["outline_color"] = ""
+    if not saved.get("anim_defaults_v3"):
+        # one time: older saves still carry the first animation defaults; give every slot the current ones
+        for key in ("anim_open", "anim_close", "anim_ease", "anim_ms", "smoke_speed"):
+            cfg[key] = DEFAULTS[key]
+            for slot in cfg["slots"]:
+                slot[key] = DEFAULTS[key]
+        cfg["anim_defaults_v3"] = True
     try:
         active = int(saved.get("active_slot", 0))
     except (TypeError, ValueError):
@@ -1369,6 +1836,7 @@ class AIWindow:
         self.slots_win = None        # the save-slots menu (Shift+M)
         self.slot_edit_win = None    # the editor for one slot
         self._open_popups = set()    # menu windows that are open right now
+        self._smoke_layers = set()   # the animated backgrounds of the open menus
         self._slots_close = None     # functions that close the three menus above (None = not open)
         self._edit_cancel = None
         self._settings_save = None
@@ -1448,6 +1916,8 @@ class AIWindow:
             print(f"\nERROR: {err}\n{SETUP_HELP}")
             self.root.destroy()
             sys.exit(1)
+        if self.cfg.get("open_on_start", True):
+            self.root.after(250, self.show_no_focus)  # open the AI window right away
         self.root.after(1500, self.send_auto_prompt)
         self.root.after(900, self.apply_fun)
         self.root.after(5000, self.check_update_async)  # quietly look for a newer version
@@ -1571,6 +2041,7 @@ class AIWindow:
                              lmargin1=8, lmargin2=8)
         self.entry.configure(bg=input_bg, fg=fg, insertbackground=fg, highlightthickness=1,
                              highlightbackground=border, highlightcolor=btn)
+        self.apply_outline()
 
     def persona_text(self):
         """The hidden instruction for the chosen persona ('' = none)."""
@@ -1653,39 +2124,74 @@ class AIWindow:
         arrow = S(14)
         style.configure("S.TLabel", background=MENU_BG, foreground=MENU_FG)
         style.configure("S.TFrame", background=MENU_BG)
-        style.configure("S.TCheckbutton", background=MENU_BG, foreground=MENU_FG, indicatorsize=S(13))
-        style.map("S.TCheckbutton", background=[("active", MENU_BG)], foreground=[("active", MENU_FG)])
-        style.configure("TNotebook", background=MENU_BG, borderwidth=0)
+        style.configure("S.TCheckbutton", background=MENU_BG, foreground=MENU_FG, indicatorsize=S(13),
+                        indicatorbackground=MENU_FIELD, indicatorforeground=MENU_FG,
+                        upperbordercolor=MENU_EDGE, lowerbordercolor=MENU_EDGE, focuscolor=MENU_BG)
+        style.map("S.TCheckbutton", background=[("active", MENU_BG)], foreground=[("active", MENU_FG)],
+                  indicatorbackground=[("active", MENU_FIELD), ("pressed", MENU_FIELD)])
+        style.configure("TNotebook", background=MENU_BG, borderwidth=0, bordercolor=MENU_BG,
+                        lightcolor=MENU_BG, darkcolor=MENU_BG)
         style.configure("TNotebook.Tab", background=MENU_TAB, foreground=MENU_FG, padding=(S(8), S(4)),
-                        borderwidth=0)
+                        borderwidth=0, bordercolor=MENU_TAB, lightcolor=MENU_TAB, darkcolor=MENU_TAB,
+                        focuscolor=MENU_TAB)
         style.map("TNotebook.Tab", background=[("selected", MENU_BUTTON), ("active", MENU_BUTTON_ACTIVE)],
-                  foreground=[("selected", MENU_FG), ("active", MENU_FG)])
+                  foreground=[("selected", MENU_FG), ("active", MENU_FG)],
+                  bordercolor=[("selected", MENU_BUTTON), ("active", MENU_BUTTON_ACTIVE)],
+                  lightcolor=[("selected", MENU_BUTTON), ("active", MENU_BUTTON_ACTIVE)],
+                  darkcolor=[("selected", MENU_BUTTON), ("active", MENU_BUTTON_ACTIVE)],
+                  focuscolor=[("selected", MENU_BUTTON), ("active", MENU_BUTTON_ACTIVE)])
+        # buttons: flat, no outline of their own
         style.configure("TButton", background=MENU_BUTTON, foreground=MENU_FG, borderwidth=0,
-                        padding=(S(10), S(4)))
+                        bordercolor=MENU_BUTTON, lightcolor=MENU_BUTTON, darkcolor=MENU_BUTTON,
+                        focuscolor=MENU_BUTTON, focusthickness=0, padding=(S(10), S(4)))
         style.map("TButton", background=[("active", MENU_BUTTON_ACTIVE), ("pressed", MENU_BUTTON_ACTIVE)],
-                  foreground=[("active", MENU_FG)])
+                  foreground=[("active", MENU_FG)],
+                  bordercolor=[("active", MENU_BUTTON_ACTIVE), ("pressed", MENU_BUTTON_ACTIVE)],
+                  lightcolor=[("active", MENU_BUTTON_ACTIVE), ("pressed", MENU_BUTTON_ACTIVE)],
+                  darkcolor=[("active", MENU_BUTTON_ACTIVE), ("pressed", MENU_BUTTON_ACTIVE)],
+                  focuscolor=[("active", MENU_BUTTON_ACTIVE), ("pressed", MENU_BUTTON_ACTIVE)])
         style.configure("Vertical.TScrollbar", background=MENU_BUTTON, troughcolor=MENU_TAB,
-                        bordercolor=MENU_TAB, arrowcolor=MENU_FG, borderwidth=0, arrowsize=arrow)
-        style.configure("TSpinbox", arrowsize=arrow)
+                        bordercolor=MENU_TAB, lightcolor=MENU_BUTTON, darkcolor=MENU_BUTTON,
+                        arrowcolor=MENU_FG, borderwidth=0, arrowsize=arrow)
+        # text boxes: glassy - a soft tinted fill with a faint outline (no hard black or white box)
+        for name in ("TEntry", "TSpinbox"):
+            style.configure(name, fieldbackground=MENU_FIELD, foreground=MENU_FG, insertcolor=MENU_FG,
+                            bordercolor=MENU_EDGE, lightcolor=MENU_EDGE, darkcolor=MENU_EDGE,
+                            selectbackground=MENU_BUTTON, selectforeground=MENU_FG)
+            style.map(name, fieldbackground=[("readonly", MENU_FIELD), ("disabled", MENU_FIELD)],
+                      foreground=[("readonly", MENU_FG), ("disabled", MENU_HINT)],
+                      bordercolor=[("focus", MENU_EDGE), ("readonly", MENU_EDGE)],
+                      lightcolor=[("focus", MENU_EDGE), ("readonly", MENU_EDGE)],
+                      darkcolor=[("focus", MENU_EDGE), ("readonly", MENU_EDGE)])
+        style.configure("TSpinbox", arrowsize=arrow, background=MENU_BUTTON, arrowcolor=MENU_FG)
+        style.map("TSpinbox", background=[("active", MENU_BUTTON_ACTIVE), ("pressed", MENU_BUTTON_ACTIVE)],
+                  arrowcolor=[("active", MENU_FG), ("pressed", MENU_FG)])
 
     def _popup(self, width, height):
         """A hidden, centered menu window (sizes are for a normal screen, they grow with the interface
         scale). Build it, then call _show_popup(win)."""
+        set_menu_theme(self.cfg.get("menu_smoke", True))  # glass look (smoke on) or plain #3D00A0 (smoke off)
         win = tk.Toplevel(self.root)
         win.withdraw()
         win.title("AI Window")
         win.configure(bg=MENU_BG)
         win.attributes("-topmost", True)
         win.resizable(False, False)
+        win.configure(padx=S(14), pady=S(14))  # the frame around the panels: the smoke shows here
+        self._outline_popup(win)
+        win._smoke = SmokeLayer(self, win)
+        self._smoke_layers.add(win._smoke)
         sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
         w = min(S(width), max(300, sw - 20))
         h = min(S(height), max(300, sh - 80))
         win.geometry(f"{w}x{h}+{max(0, (sw - w) // 2)}+{max(0, (sh - h) // 2)}")
+        win._rect = (max(0, (sw - w) // 2), max(0, (sh - h) // 2), w, h)
         self._open_popups.add(win)
 
         def on_destroy(ev, win=win):
             if ev.widget is win:  # (the event also fires for every widget inside the menu)
                 self._open_popups.discard(win)
+                self._smoke_layers.discard(getattr(win, "_smoke", None))
                 try:
                     self.root.after(80, self._menu_closed)
                 except tk.TclError:
@@ -1694,11 +2200,225 @@ class AIWindow:
         win.bind("<Destroy>", on_destroy)
         return win
 
+    # ---------- outline ----------
+    def _outline_color(self):
+        """The outline color in use: your own color, or (when none is set) the color of the top bar."""
+        own = str(self.cfg.get("outline_color", "") or "")
+        if HEX_RE.match(own):
+            return own
+        hdr = str(self.cfg.get("header_color", DEFAULTS["header_color"]))
+        return hdr if HEX_RE.match(hdr) else DEFAULTS["header_color"]
+
+    def _outline(self):
+        """(thickness in pixels, color) of the outline; thickness 0 = outline switched off."""
+        color = self._outline_color()
+        if not self.cfg.get("outline_enabled", True):
+            return 0, color
+        try:
+            width = min(6, max(1, int(self.cfg.get("outline_width", DEFAULTS["outline_width"]))))
+        except (TypeError, ValueError):
+            width = DEFAULTS["outline_width"]
+        return S(width), color
+
+    def _outline_popup(self, win):
+        thick, color = self._outline()
+        win.configure(highlightthickness=thick, highlightbackground=color, highlightcolor=color)
+
+    def apply_outline(self):
+        """Outline around the AI window, its text boxes and the menus (and the menu text boxes)."""
+        thick, color = self._outline()
+        try:
+            self.root.configure(highlightthickness=thick, highlightbackground=color, highlightcolor=color)
+            if thick:
+                self.entry.configure(highlightthickness=max(1, thick), highlightbackground=color,
+                                     highlightcolor=color)
+                self.chat.configure(highlightthickness=max(1, thick // 2 or 1), highlightbackground=color,
+                                    highlightcolor=color)
+            else:
+                self.chat.configure(highlightthickness=0)
+        except tk.TclError:
+            pass
+        for win in list(self._open_popups):
+            try:
+                self._outline_popup(win)
+            except tk.TclError:
+                pass
+
+    # ---------- animations ----------
+    def _anim_settings(self, which):
+        kind = self.cfg.get(which, DEFAULTS[which])
+        kind = kind if kind in ANIM_KINDS else DEFAULTS[which]
+        ease = self.cfg.get("anim_ease", DEFAULTS["anim_ease"])
+        ease = ease if ease in EASINGS else DEFAULTS["anim_ease"]
+        try:
+            ms = min(1500, max(0, int(self.cfg.get("anim_ms", DEFAULTS["anim_ms"]))))
+        except (TypeError, ValueError):
+            ms = DEFAULTS["anim_ms"]
+        return kind, ease, ms
+
+    def _win_rect(self, win):
+        """(x, y, w, h) of a window as it rests on screen; None when unknown."""
+        rect = getattr(win, "_rect", None)
+        if rect:
+            return rect
+        m = re.match(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", win.geometry())
+        if not m or int(m.group(1)) < 20:
+            return None
+        w, h, x, y = (int(g) for g in m.groups())
+        return x, y, w, h
+
+    def _resolve_spec(self, win, spec, rect):
+        """Make a slide fit on the screen: a window can't slide in from a side that has no room (the
+        window manager would push it back, so nothing would move). Then it comes from the other side."""
+        if spec is None or rect is None or not (spec.get("dx") or spec.get("dy")):
+            return spec
+        x, y, w, h = rect
+        try:
+            sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+        except tk.TclError:
+            return spec
+        spec = dict(spec)
+        want = S(80)
+        for key, lo, hi in (("dx", x, sw - (x + w)), ("dy", y, sh - (y + h))):
+            d = spec.get(key, 0)
+            if not d:
+                continue
+            room = lo if d < 0 else hi
+            other = hi if d < 0 else lo
+            if room < S(30) and other > room:
+                d, room = -d, other        # no room on that side: come from the opposite side
+            spec[key] = d
+            spec["dist_" + key] = max(S(30), min(want, room))
+        return spec
+
+    def _anim_frame(self, win, spec, s, rect, base_alpha):
+        """Show one picture of the animation. s = 0 hidden ... 1 fully shown (can overshoot a bit)."""
+        x, y, w, h = rect
+        if spec.get("fade"):
+            try:
+                win.attributes("-alpha", base_alpha * min(1.0, max(0.0, s)))
+            except tk.TclError:
+                pass
+        x += int(spec.get("dx", 0) * spec.get("dist_dx", S(80)) * (1 - s))
+        y += int(spec.get("dy", 0) * spec.get("dist_dy", S(80)) * (1 - s))
+        if spec.get("scale"):
+            f = max(0.05, 0.7 + 0.3 * s)
+            nw, nh = max(24, int(w * f) // 8 * 8), max(24, int(h * f) // 8 * 8)  # (coarse steps: less re-layout)
+            geo = f"{nw}x{nh}+{x + (w - nw) // 2}+{y + (h - nh) // 2}"
+        elif spec.get("dx") or spec.get("dy"):
+            geo = f"+{x}+{y}"
+        else:
+            return
+        if getattr(win, "_last_geo", None) != geo:  # (don't ask the window manager for the same thing twice)
+            win._last_geo = geo
+            win.geometry(geo)
+
+    def _cancel_anim(self, win):
+        """Stop a running animation and put the window back exactly where / how it rests."""
+        st = getattr(win, "_anim", None)
+        if not st:
+            return
+        win._anim = None
+        win._last_geo = None
+        try:
+            win.after_cancel(st["job"])
+        except (tk.TclError, ValueError, KeyError):
+            pass
+        try:
+            x, y, w, h = st["rect"]
+            win.geometry(f"{w}x{h}+{x}+{y}")
+            win.attributes("-alpha", st["alpha"])
+        except tk.TclError:
+            pass
+
+    def _animate(self, win, kind, ease, ms, opening, rect, base_alpha, done=None):
+        """Run an animation on a window. Returns False (and does nothing) when there is nothing to animate."""
+        spec = self._resolve_spec(win, ANIM_KINDS.get(kind), rect)
+        if spec is None or ms <= 0 or rect is None:
+            return False
+        self._cancel_anim(win)
+        fn = EASINGS[ease]
+        start = time.time()
+        st = {"rect": rect, "alpha": base_alpha, "closing": not opening, "job": None}
+        win._anim = st
+
+        def step():
+            if getattr(win, "_anim", None) is not st:
+                return
+            try:
+                t = min(1.0, (time.time() - start) / (ms / 1000.0))
+                e = fn(t)
+                self._anim_frame(win, spec, e if opening else 1 - e, rect, base_alpha)
+                if t >= 1.0:
+                    win._anim = None
+                    win._last_geo = None
+                    if opening:
+                        x, y, w, h = rect
+                        win.geometry(f"{w}x{h}+{x}+{y}")
+                        win.attributes("-alpha", base_alpha)
+                    if done:
+                        done()
+                    return
+                st["job"] = win.after(8, step)
+            except tk.TclError:
+                win._anim = None
+        step()
+        return True
+
+    def apply_menu_smoke(self):
+        """Smoke on/off was changed: switch every open menu to the other look (glass <-> plain #3D00A0)."""
+        old = menu_theme_values()
+        set_menu_theme(self.cfg.get("menu_smoke", True))
+        new = menu_theme_values()
+        if old != new:
+            wins = list(self._open_popups)
+            if wins:
+                try:
+                    self._menu_styles(wins[0])  # the ttk styles are shared by all menus
+                except tk.TclError:
+                    pass
+            for win in wins:
+                try:
+                    self._recolor_menu(win, old, new)
+                except tk.TclError:
+                    pass
+        for layer in list(self._smoke_layers):
+            layer.refresh()
+
+    def _recolor_menu(self, root, old, new):
+        """Give every widget in an open menu the colors of the other look. (Slot cards keep their own colors.)"""
+        bg_map = {old[k].lower(): new[k] for k in ("MENU_BG", "MENU_TAB", "MENU_BUTTON", "MENU_BUTTON_ACTIVE")}
+        fg_map = {old["MENU_HINT"].lower(): new["MENU_HINT"]}
+        edge_map = {old["MENU_EDGE"].lower(): new["MENU_EDGE"]}
+        groups = ((("bg", "activebackground", "selectcolor", "troughcolor"), bg_map),
+                  (("fg", "activeforeground"), fg_map),
+                  (("highlightbackground", "highlightcolor"), edge_map))
+
+        def walk(w):
+            if getattr(w, "_no_recolor", False):
+                return
+            for opts, mapping in groups:
+                for opt in opts:
+                    try:
+                        cur = str(w.cget(opt)).lower()
+                    except tk.TclError:
+                        continue  # (this kind of widget has no such option)
+                    if cur in mapping:
+                        try:
+                            w.configure(**{opt: mapping[cur]})
+                        except tk.TclError:
+                            pass
+            for child in w.winfo_children():
+                walk(child)
+
+        walk(root)
+
     def _drag_bar(self, win, text):
-        """A thin purple strip at the top of a menu: it shows the title and you drag it to move the menu."""
-        bar = tk.Frame(win, bg=MENU_BUTTON)
+        """A thin glass strip at the top of a menu: it shows the title and you drag it to move the menu."""
+        bar = tk.Frame(win, bg=MENU_BG, highlightthickness=1, highlightbackground=MENU_EDGE,
+                       highlightcolor=MENU_EDGE)  # same material as the plates below it
         bar.pack(side="top", fill="x")
-        lbl = tk.Label(bar, text=text, bg=MENU_BUTTON, fg=MENU_FG, font=("Sans", 10, "bold"))
+        lbl = tk.Label(bar, text=text, bg=MENU_BG, fg=MENU_FG, font=("Sans", 10, "bold"))
         lbl.pack(side="left", padx=10, pady=S(4))
         state = {}
 
@@ -1727,15 +2447,26 @@ class AIWindow:
             except tk.TclError:
                 pass
 
+        kind, ease, ms = self._anim_settings("anim_open")
+        rect = getattr(win, "_rect", None)
+        spec = self._resolve_spec(win, ANIM_KINDS.get(kind), rect) if self.cfg.get("anim_menus", True) else None
+        animate = spec is not None and ms > 0 and rect is not None
+        if animate:
+            self._anim_frame(win, spec, 0.0, rect, 1.0)  # start invisible / off to the side
         win.deiconify()
         win.lift()
         win.attributes("-topmost", True)
         grab_focus()
+        if animate:
+            self._animate(win, kind, ease, ms, True, rect, 1.0)
         if not used_hint:
             win.bind("<ButtonPress-1>", grab_focus, add="+")  # unmanaged windows need to take focus themselves
         else:
             def verify():
                 try:
+                    if win.winfo_exists() and getattr(win, "_anim", None):
+                        win.after(150, verify)  # wait until the animation is over
+                        return
                     if win.winfo_exists() and self._is_decorated(win):  # the hint was ignored
                         win.withdraw()
                         win.overrideredirect(True)
@@ -1862,24 +2593,84 @@ class AIWindow:
         except tk.TclError:
             pass
 
+    def _base_alpha(self):
+        try:
+            return min(1.0, max(0.1, float(self.cfg.get("opacity", 1.0))))
+        except (ValueError, TypeError):
+            return 1.0
+
+    def _hiding(self):
+        st = getattr(self.root, "_anim", None)
+        return bool(st and st.get("closing"))
+
     def show_no_focus(self):
+        visible = self.root.state() == "normal"
+        if visible and not self._hiding():
+            self.apply_opacity()
+            self.root.attributes("-topmost", True)
+            self.root.lift()
+            return
+        rect = self._win_rect(self.root)
+        self._cancel_anim(self.root)  # (a window that was on its way out comes straight back)
+        kind, ease, ms = self._anim_settings("anim_open")
+        spec = self._resolve_spec(self.root, ANIM_KINDS.get(kind), rect)
+        alpha = self._base_alpha()
+        if spec is not None and ms > 0 and rect is not None and not visible:
+            self._anim_frame(self.root, spec, 0.0, rect, alpha)  # start invisible / off to the side
         self.root.deiconify()
-        self.apply_opacity()
+        if spec is None or ms <= 0 or rect is None or visible:
+            self.apply_opacity()
         self.root.attributes("-topmost", True)
         self.root.lift()
-        self._verify_frameless()
+        if spec is not None and ms > 0 and rect is not None and not visible:
+            if self._animate(self.root, kind, ease, ms, True, rect, alpha):
+                self.root.after(ms + 80, self._verify_frameless)  # (it pauses a moment: not in the middle of the animation)
+            else:
+                self.apply_opacity()
+                self._verify_frameless()
+        else:
+            self._verify_frameless()
 
     def toggle_window(self):
-        if self.root.state() == "normal":
+        if self.root.state() == "normal" and not self._hiding():
             self.hide()
         else:
             self.show_no_focus()
 
-    def hide(self):
-        self.root.withdraw()
-        if self.settings_win and self.settings_win.winfo_exists():
+    def hide(self, keep_menus=False):
+        if not keep_menus and self.settings_win and self.settings_win.winfo_exists():
             self.settings_win.destroy()
             self.settings_win = None
+        if self._hiding():
+            return
+        kind, ease, ms = self._anim_settings("anim_close")
+        rect = None
+        st = getattr(self.root, "_anim", None)
+        if self.root.state() == "normal":
+            rect = st["rect"] if st else self._win_rect(self.root)
+        alpha = self._base_alpha()
+
+        def finish():
+            self.root.withdraw()
+            try:
+                x, y, w, h = rect
+                self.root.geometry(f"{w}x{h}+{x}+{y}")
+            except (TypeError, ValueError, tk.TclError):
+                pass
+            self.apply_opacity()
+
+        if not self._animate(self.root, kind, ease, ms, False, rect, alpha, done=finish):
+            self._cancel_anim(self.root)
+            self.root.withdraw()
+
+    def preview_animation(self):
+        """Settings > Animations > Preview: the AI window goes away and comes back with the chosen animations."""
+        if self.root.state() == "normal" and not self._hiding():
+            self.hide(keep_menus=True)
+            kind, ease, ms = self._anim_settings("anim_close")
+            self.root.after(ms + 450, self.show_no_focus)
+        else:
+            self.show_no_focus()
 
     def quit_app(self):
         self.engine.shutdown()
@@ -2033,6 +2824,7 @@ class AIWindow:
         mode = self.cfg.get("screenshot_mode" if slot == 1 else "screenshot2_mode",
                             "area" if slot == 1 else "full")
         keep = bool(self.cfg.get("screenshot_keep_focus", DEFAULTS["screenshot_keep_focus"]))
+        keep = keep or bool(self.cfg.get("screenshot_no_open", False))  # "never open" needs the same gentle behaviour
         state, ready = {}, threading.Event()
 
         def reveal():
@@ -2053,6 +2845,7 @@ class AIWindow:
 
         def prep():
             # hide our window so it is not in the screenshot / not in the way of the selection
+            self._cancel_anim(self.root)
             state["visible"] = self.root.state() == "normal"
             if state["visible"]:
                 if keep:
@@ -2535,7 +3328,7 @@ class AIWindow:
 
             def side_button(row_i, label_text, command, enabled=True):
                 tk.Button(frame, text=label_text, width=BTN_W, bg=MENU_BUTTON, fg=MENU_FG,
-                          activebackground=MENU_BUTTON_ACTIVE, activeforeground=MENU_FG, relief="flat",
+                          activebackground=MENU_BUTTON_ACTIVE, activeforeground=MENU_FG, relief="flat", bd=0, highlightthickness=0,
                           pady=S(3), state="normal" if enabled else "disabled",
                           command=command).grid(row=row_i, column=1, sticky="e", padx=(S(8), 0), pady=S(2))
 
@@ -2543,7 +3336,7 @@ class AIWindow:
                 info = self.update_info or {}
                 tk.Button(frame, text=f"\u2B06  Update available: {info.get('version', '')}  -  click to update",
                           bg="#1f9d55", fg="#ffffff", activebackground="#27b866", activeforeground="#ffffff",
-                          relief="flat", pady=S(6), command=self.install_update_async
+                          relief="flat", bd=0, highlightthickness=0, pady=S(6), command=self.install_update_async
                           ).grid(row=r, column=0, columnspan=2, sticky="ew", pady=S(2))
                 r += 1
                 note = info.get("notes") or ""
@@ -2670,9 +3463,21 @@ class AIWindow:
             self._refresh_update_row()
 
         tk.Label(win, text=f"Made by Invis  \u00b7  {VERSION}", bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8),
-                 anchor="e").pack(side="bottom", fill="x", padx=10, pady=(0, S(4)))
+                 anchor="e").pack(side="bottom", anchor="e", padx=10, pady=(0, S(4)))
+        smoke_var = tk.BooleanVar(value=bool(self.cfg.get("menu_smoke", True)))
+
+        def smoke_toggled(*_):
+            self.cfg["menu_smoke"] = bool(smoke_var.get())
+            save_config(self.cfg)
+            self.apply_menu_smoke()
+
+        smoke_var.trace_add("write", smoke_toggled)
+        tk.Checkbutton(win, text="Animated smoke background", variable=smoke_var, bg=MENU_BG, fg=MENU_FG,
+                       selectcolor=MENU_TAB, activebackground=MENU_BG, activeforeground=MENU_FG,
+                       highlightthickness=0, bd=0).pack(side="bottom", padx=S(14), pady=(S(4), 0))
         btns = tk.Frame(win, bg=MENU_BG)
         btns.pack(side="bottom", fill="x", padx=S(14), pady=S(10))
+        win._smoke.see_through(btns)  # no box / outline behind the buttons
         for col in range(3):  # three buttons of exactly the same width
             btns.grid_columnconfigure(col, weight=1, uniform="slot_buttons")
         tk.Label(win, text="Click a slot to use it. Each slot remembers every setting. "
@@ -2684,12 +3489,14 @@ class AIWindow:
         body.pack(fill="both", expand=True, padx=S(14), pady=(S(8), 0))
         canvas = tk.Canvas(body, bg=MENU_BG, highlightthickness=0, bd=0)
         bar = ttk.Scrollbar(body, orient="vertical", command=canvas.yview)
-        canvas.configure(yscrollcommand=bar.set)
-        inner = tk.Frame(canvas, bg=MENU_BG)
+        canvas.configure(yscrollcommand=win._smoke.attach(canvas, bar.set))
+        inner = tk.Frame(canvas, bg=MENU_BG, highlightthickness=1, highlightbackground=MENU_EDGE,
+                         highlightcolor=MENU_EDGE)  # glass panel with a faint outline
+        win._smoke.glass_panel(inner)  # frosted glass
         item = canvas.create_window((0, 0), window=inner, anchor="nw")
 
         def refresh_scroll(_e=None):
-            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.configure(scrollregion=canvas.bbox(item))
             canvas.itemconfigure(item, width=canvas.winfo_width())
             need = inner.winfo_reqheight() > canvas.winfo_height()
             if need and not bar.winfo_ismapped():
@@ -2699,7 +3506,7 @@ class AIWindow:
                 canvas.yview_moveto(0)
 
         inner.bind("<Configure>", refresh_scroll)
-        canvas.bind("<Configure>", refresh_scroll)
+        canvas.bind("<Configure>", refresh_scroll, add="+")
         canvas.pack(side="left", fill="both", expand=True)
 
         def on_wheel(ev):
@@ -2737,7 +3544,7 @@ class AIWindow:
 
         def flat_button(parent, text, command, color=MENU_BUTTON, active=MENU_BUTTON_ACTIVE):
             return tk.Button(parent, text=text, bg=color, fg=MENU_FG, activebackground=active,
-                             activeforeground=MENU_FG, relief="flat", padx=S(12), pady=S(5), command=command)
+                             activeforeground=MENU_FG, relief="flat", bd=0, highlightthickness=0, padx=S(12), pady=S(5), command=command)
 
         add_btn = flat_button(btns, "+ New slot", add)
         add_btn.grid(row=0, column=0, sticky="ew", padx=S(4))
@@ -2746,7 +3553,8 @@ class AIWindow:
 
         def render():
             for child in inner.winfo_children():
-                child.destroy()
+                if not getattr(child, "_backdrop", False):   # (keep the frosted picture behind the cards)
+                    child.destroy()
             del photos[:]
             active_i = self.cfg.get("active_slot", 0)
             for i, slot in enumerate(self.cfg["slots"]):
@@ -2759,6 +3567,7 @@ class AIWindow:
                 btn_fg = "#ffffff" if luminance(btn) < 0.6 else "#16171a"
                 card = tk.Frame(inner, bg=bg, highlightthickness=S(3 if active else 1),
                                 highlightbackground="#ffffff" if active else hdr)
+                card._no_recolor = True
                 card.pack(fill="x", pady=S(5), padx=S(2))
                 tk.Frame(card, bg=hdr, height=S(5)).pack(fill="x")
                 row = tk.Frame(card, bg=bg)
@@ -2790,11 +3599,11 @@ class AIWindow:
                 side = tk.Frame(row, bg=bg)
                 side.pack(side="right", padx=(S(6), 0))
                 tk.Button(side, text="In use" if active else "Use", bg=btn, fg=btn_fg,
-                          activebackground=shade(btn, -0.15), activeforeground=btn_fg, relief="flat",
+                          activebackground=shade(btn, -0.15), activeforeground=btn_fg, relief="flat", bd=0, highlightthickness=0,
                           width=8, padx=S(10), pady=S(3), command=lambda i=i: use(i)).pack(fill="x")
                 tk.Button(side, text="Edit", bg=shade(bg, 0.2 if dark else -0.12), fg=fg,
                           activebackground=shade(bg, 0.3 if dark else -0.2), activeforeground=fg,
-                          relief="flat", width=8, padx=S(10), pady=S(3),
+                          relief="flat", bd=0, highlightthickness=0, width=8, padx=S(10), pady=S(3),
                           command=lambda i=i: edit(i)).pack(fill="x", pady=(S(4), 0))
                 for w in clickable:
                     w.bind("<Button-1>", lambda _e, i=i: use(i))
@@ -2804,6 +3613,7 @@ class AIWindow:
         self._slots_close = close
         win.bind("<Escape>", close)
         win.protocol("WM_DELETE_WINDOW", close)
+        win._smoke.glass_panel(win)  # every text plate + the top bar become frosted glass like the settings menu
         self._show_popup(win)
 
     def open_slot_editor(self):
@@ -2823,7 +3633,11 @@ class AIWindow:
 
         btns = tk.Frame(win, bg=MENU_BG)
         btns.pack(side="bottom", pady=S(10))
-        body = ttk.Frame(win, style="S.TFrame", padding=S(14))
+        win._smoke.see_through(btns)  # no box / outline behind the buttons
+        body_edge = tk.Frame(win, bg=MENU_BG, highlightthickness=1, highlightbackground=MENU_EDGE,
+                             highlightcolor=MENU_EDGE)  # glass panel with a faint outline
+        body_edge.pack(fill="both", expand=True)
+        body = ttk.Frame(body_edge, style="S.TFrame", padding=S(14))
         body.pack(fill="both", expand=True)
 
         def hint(row, text, color=MENU_HINT):
@@ -3017,7 +3831,7 @@ class AIWindow:
 
         def flat_button(text, command, color=MENU_BUTTON, active=MENU_BUTTON_ACTIVE):
             b = tk.Button(btns, text=text, bg=color, fg=MENU_FG, activebackground=active,
-                          activeforeground=MENU_FG, relief="flat", padx=S(12), command=command)
+                          activeforeground=MENU_FG, relief="flat", bd=0, highlightthickness=0, padx=S(12), command=command)
             b.pack(side="left", padx=4)
             return b
 
@@ -3026,6 +3840,8 @@ class AIWindow:
         del_btn = flat_button("Delete slot", delete)
         flat_button("Cancel", lambda: finish(False, self.open_slots))
 
+        win._smoke.glass_panel(body_edge)  # frosted glass
+        win._smoke.glass_panel(win)        # (and the top bar)
         self._edit_cancel = lambda: finish(False)
         win.bind("<Escape>", lambda _e: finish(False, self.open_slots))
         win.protocol("WM_DELETE_WINDOW", lambda: finish(False, self.open_slots))
@@ -3036,7 +3852,7 @@ class AIWindow:
         if self.settings_win is not None and self.settings_win.winfo_exists():
             self.settings_win.lift()
             return
-        win = self._popup(580, 640)
+        win = self._popup(720, 660)
         self.settings_win = win
         self._menu_styles(win)
         _slots_t = self.cfg.get("slots") or []
@@ -3057,13 +3873,15 @@ class AIWindow:
             outer = ttk.Frame(nb, style="S.TFrame")
             canvas = tk.Canvas(outer, bg=MENU_BG, highlightthickness=0, bd=0)
             bar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
-            canvas.configure(yscrollcommand=bar.set)
-            inner = ttk.Frame(canvas, style="S.TFrame", padding=12)
-            item = canvas.create_window((0, 0), window=inner, anchor="nw")
+            canvas.configure(yscrollcommand=win._smoke.attach(canvas, bar.set))
+            edge = tk.Frame(canvas, bg=MENU_BG, highlightthickness=1, highlightbackground=MENU_EDGE,
+                            highlightcolor=MENU_EDGE)  # the faint glass outline
+            inner = ttk.Frame(edge, style="S.TFrame", padding=12)
+            inner.pack(fill="both", expand=True)
+            item = canvas.create_window((0, 0), window=edge, anchor="nw")
 
             def refresh(_e=None):
-                canvas.configure(scrollregion=canvas.bbox("all"))
-                canvas.itemconfigure(item, width=canvas.winfo_width())
+                canvas.configure(scrollregion=canvas.bbox(item))  # (the smoke picture is not part of the content)
                 need = inner.winfo_reqheight() > canvas.winfo_height()
                 if need and not bar.winfo_ismapped():
                     bar.pack(side="right", fill="y", before=canvas)
@@ -3072,7 +3890,7 @@ class AIWindow:
                     canvas.yview_moveto(0)
 
             inner.bind("<Configure>", refresh)
-            canvas.bind("<Configure>", refresh)
+            canvas.bind("<Configure>", refresh, add="+")
             canvas.pack(side="left", fill="both", expand=True)
             nb.add(outer, text=name)
             canvases[str(outer)] = canvas
@@ -3087,9 +3905,9 @@ class AIWindow:
         for seq in ("<Button-4>", "<Button-5>", "<MouseWheel>"):
             win.bind(seq, on_wheel)
 
-        t_ai, t_look, t_win, t_keys, t_type, t_shot, t_fun = (new_tab("AI"), new_tab("Look"), new_tab("Window"),
-                                                              new_tab("Keybinds"), new_tab("Typing"),
-                                                              new_tab("Screenshot"), new_tab("Fun"))
+        t_ai, t_look, t_win, t_keys, t_type, t_shot, t_anim, t_fun = (
+            new_tab("AI"), new_tab("Look"), new_tab("Window"), new_tab("Keybinds"), new_tab("Typing"),
+            new_tab("Screenshot"), new_tab("Animations"), new_tab("Fun"))  # (Fun is always the last tab)
 
         # ================= AI tab =================
         prov_state = copy.deepcopy(self.cfg["providers"])
@@ -3204,6 +4022,7 @@ class AIWindow:
 
         COLOR_KEYS = ("bg_color", "header_color", "button_color")
         applying = [False]  # True while a preset is being applied (so it is not taken for a manual edit)
+        outline_sync_hook = [lambda: None]  # (set further down: shows the outline color that is really used)
         _now = tuple(str(self.cfg.get(k, "")).lower() for k in COLOR_KEYS)
         _saved = self.cfg.get("custom_colors")
         custom_saved = ([str(c).lower() for c in _saved] if isinstance(_saved, list) and len(_saved) == 3
@@ -3252,6 +4071,7 @@ class AIWindow:
                     self.cfg[cfg_key] = c
                     self.apply_theme()
                     on_manual_color_change()
+                    outline_sync_hook[0]()
             var.trace_add("write", changed)
 
         color_row(1, "Background color", "bg_color")
@@ -3268,10 +4088,14 @@ class AIWindow:
             name = theme_var.get()
             preset = THEMES.get(name) or (tuple(custom_saved) if name == "Custom colors" else None)
             if preset:
+                if name in THEMES:
+                    self.cfg["outline_color"] = ""  # a real preset: the outline follows its top bar color again
                 applying[0] = True
                 for cfg_key, value in zip(COLOR_KEYS, preset):
                     color_vars[cfg_key].set(value)
                 applying[0] = False
+                outline_sync_hook[0]()
+                self.apply_outline()
         theme_var.trace_add("write", apply_theme_preset)
 
         # ----- Window tab: corner, size, exact X/Y, frameless -----
@@ -3329,6 +4153,11 @@ class AIWindow:
                       "window stops working, turn this off."
                  ).grid(row=11, column=0, columnspan=3, sticky="w")
 
+        open_start_var = tk.BooleanVar(value=bool(self.cfg.get("open_on_start", True)))
+        ttk.Checkbutton(t_win, text="Open the AI window when the program starts",
+                        variable=open_start_var, style="S.TCheckbutton").grid(row=14, column=0, columnspan=3,
+                                                                               sticky="w", pady=(14, 2))
+
         def frameless_changed(*_):
             self.cfg["frameless"] = bool(frameless_var.get())
             self.apply_frameless()
@@ -3361,6 +4190,123 @@ class AIWindow:
         tk.Label(t_look, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(360),
                  text="100 = solid, lower = more see-through (text fades too). Minimum 10%."
                  ).grid(row=10, column=0, columnspan=4, sticky="w")
+
+        smoke_var = tk.BooleanVar(value=bool(self.cfg.get("menu_smoke", True)))
+        ttk.Checkbutton(t_look, text="Animated smoke background in the menus\n(off = plain purple #3D00A0)",
+                        variable=smoke_var, style="S.TCheckbutton").grid(row=30, column=0, columnspan=4,
+                                                                          sticky="w", pady=(14, 2))
+
+        def smoke_changed(*_):
+            self.cfg["menu_smoke"] = bool(smoke_var.get())
+            self.apply_menu_smoke()
+        smoke_var.trace_add("write", smoke_changed)
+
+        # ----- outline around the window, text boxes and menus -----
+        outline_var = tk.BooleanVar(value=bool(self.cfg.get("outline_enabled", True)))
+        outline_color_var = tk.StringVar(value=self._outline_color())
+        outline_prog = [False]  # True while the program (not you) sets the color box
+        outline_width_var = tk.IntVar(value=int(self.cfg.get("outline_width", DEFAULTS["outline_width"])))
+        ttk.Separator(t_look, orient="horizontal").grid(row=31, column=0, columnspan=4, sticky="ew", pady=(10, 4))
+        ttk.Checkbutton(t_look, text="Outline around the window, the text boxes and the menus",
+                        variable=outline_var, style="S.TCheckbutton").grid(row=32, column=0, columnspan=4,
+                                                                            sticky="w", pady=(4, 2))
+        ttk.Label(t_look, text="Outline color", style="S.TLabel").grid(row=33, column=0, sticky="w", pady=4)
+        ttk.Entry(t_look, textvariable=outline_color_var, width=9).grid(row=33, column=1, sticky="w", pady=4)
+        outline_swatch = tk.Label(t_look, width=3, bg=outline_color_var.get(), relief="solid", bd=1)
+        outline_swatch.grid(row=33, column=2, padx=6)
+
+        def pick_outline():
+            cur = outline_color_var.get() if HEX_RE.match(outline_color_var.get()) else self._outline_color()
+            _rgb, chosen = colorchooser.askcolor(color=cur, parent=win, title="Outline color")
+            if chosen:
+                outline_color_var.set(chosen)
+
+        ttk.Button(t_look, text="Pick...", width=7, command=pick_outline).grid(row=33, column=3, sticky="w")
+
+        def outline_sync():
+            """Show the color the outline really has (it follows the top bar until you pick your own)."""
+            outline_prog[0] = True
+            try:
+                outline_color_var.set(self._outline_color())
+                outline_swatch.config(bg=self._outline_color())
+            except tk.TclError:
+                pass
+            finally:
+                outline_prog[0] = False
+
+        def outline_follow_top_bar():
+            self.cfg["outline_color"] = ""
+            outline_sync()
+            self.apply_outline()
+        outline_sync_hook[0] = lambda: (outline_sync(), self.apply_outline())
+        ttk.Button(t_look, text="Match top bar", width=14, command=outline_follow_top_bar).grid(
+            row=35, column=1, columnspan=3, sticky="w", pady=(2, 4))
+        ttk.Label(t_look, text="Outline thickness", style="S.TLabel").grid(row=34, column=0, sticky="w", pady=4)
+        tk.Scale(t_look, from_=1, to=6, orient="horizontal", variable=outline_width_var, length=S(170),
+                 sliderlength=S(30), width=S(15), bg=MENU_BG, fg=MENU_FG, troughcolor=MENU_TAB,
+                 highlightthickness=0, bd=0).grid(row=34, column=1, columnspan=3, sticky="w", pady=2)
+
+        def outline_changed(*_):
+            c = outline_color_var.get().strip()
+            if HEX_RE.match(c):
+                outline_swatch.config(bg=c)
+                if not outline_prog[0]:
+                    self.cfg["outline_color"] = c   # you chose it: from now on it no longer follows the top bar
+            self.cfg["outline_enabled"] = bool(outline_var.get())
+            try:
+                self.cfg["outline_width"] = int(outline_width_var.get())
+            except (tk.TclError, ValueError):
+                pass
+            self.apply_outline()
+        for v in (outline_var, outline_color_var, outline_width_var):
+            v.trace_add("write", outline_changed)
+
+        # ================= Animations tab =================
+        anim_open_var = tk.StringVar(value=self.cfg.get("anim_open", DEFAULTS["anim_open"]))
+        anim_close_var = tk.StringVar(value=self.cfg.get("anim_close", DEFAULTS["anim_close"]))
+        anim_ease_var = tk.StringVar(value=self.cfg.get("anim_ease", DEFAULTS["anim_ease"]))
+        anim_ms_var = tk.IntVar(value=int(self.cfg.get("anim_ms", DEFAULTS["anim_ms"])))
+        anim_menus_var = tk.BooleanVar(value=bool(self.cfg.get("anim_menus", True)))
+        smoke_speed_var = tk.IntVar(value=int(self.cfg.get("smoke_speed", DEFAULTS["smoke_speed"])))
+
+        ttk.Label(t_anim, text="Window appears", style="S.TLabel").grid(row=0, column=0, sticky="w", pady=4)
+        choice(t_anim, anim_open_var, list(ANIM_KINDS), 20).grid(row=0, column=1, sticky="w", pady=4)
+        ttk.Label(t_anim, text="Window goes away", style="S.TLabel").grid(row=1, column=0, sticky="w", pady=4)
+        choice(t_anim, anim_close_var, list(ANIM_KINDS), 20).grid(row=1, column=1, sticky="w", pady=4)
+        ttk.Label(t_anim, text="Speed curve", style="S.TLabel").grid(row=2, column=0, sticky="w", pady=4)
+        choice(t_anim, anim_ease_var, list(EASINGS), 20).grid(row=2, column=1, sticky="w", pady=4)
+        ttk.Label(t_anim, text="Duration (ms)", style="S.TLabel").grid(row=3, column=0, sticky="w", pady=4)
+        tk.Scale(t_anim, from_=50, to=1000, resolution=10, orient="horizontal", variable=anim_ms_var,
+                 length=S(190), sliderlength=S(30), width=S(15), bg=MENU_BG, fg=MENU_FG, troughcolor=MENU_TAB,
+                 highlightthickness=0, bd=0).grid(row=3, column=1, sticky="w", pady=2)
+        ttk.Checkbutton(t_anim, text="Menus appear with this animation too", variable=anim_menus_var,
+                        style="S.TCheckbutton").grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 2))
+        ttk.Button(t_anim, text="Preview", width=10, command=self.preview_animation).grid(
+            row=5, column=0, sticky="w", pady=(8, 2))
+        tk.Label(t_anim, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(400),
+                 text="Preview makes the AI window go away and come back. Speed curves: Sine = smooth, Ease out = "
+                      "fast then slow, Back = overshoots a little, Bounce / Elastic = springy. Fade needs a "
+                      "desktop with compositing (GNOME / KDE have it); without it the window just appears. "
+                      "Menus use the 'appears' animation (they close at once)."
+                 ).grid(row=6, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        ttk.Separator(t_anim, orient="horizontal").grid(row=7, column=0, columnspan=2, sticky="ew", pady=12)
+        ttk.Label(t_anim, text="Menu smoke speed (%)", style="S.TLabel").grid(row=8, column=0, sticky="w", pady=4)
+        tk.Scale(t_anim, from_=20, to=300, resolution=10, orient="horizontal", variable=smoke_speed_var,
+                 length=S(190), sliderlength=S(30), width=S(15), bg=MENU_BG, fg=MENU_FG, troughcolor=MENU_TAB,
+                 highlightthickness=0, bd=0).grid(row=8, column=1, sticky="w", pady=2)
+
+        def anim_changed(*_):
+            self.cfg["anim_open"] = anim_open_var.get() if anim_open_var.get() in ANIM_KINDS else DEFAULTS["anim_open"]
+            self.cfg["anim_close"] = anim_close_var.get() if anim_close_var.get() in ANIM_KINDS else DEFAULTS["anim_close"]
+            self.cfg["anim_ease"] = anim_ease_var.get() if anim_ease_var.get() in EASINGS else DEFAULTS["anim_ease"]
+            self.cfg["anim_menus"] = bool(anim_menus_var.get())
+            try:
+                self.cfg["anim_ms"] = int(anim_ms_var.get())
+                self.cfg["smoke_speed"] = int(smoke_speed_var.get())
+            except (tk.TclError, ValueError):
+                pass
+        for v in (anim_open_var, anim_close_var, anim_ease_var, anim_ms_var, anim_menus_var, smoke_speed_var):
+            v.trace_add("write", anim_changed)
 
         font_var = tk.IntVar(value=int(self.cfg.get("font_size", DEFAULTS["font_size"])))
 
@@ -3501,6 +4447,16 @@ class AIWindow:
                       "was closed it stays closed (open it with the open/close key, or use the paste / type "
                       "keys to get the answer). Off: the window opens after every screenshot."
                  ).grid(row=6, column=0, columnspan=2, sticky="w")
+
+        no_open_var = tk.BooleanVar(value=bool(self.cfg.get("screenshot_no_open", False)))
+        ttk.Checkbutton(t_shot, text="Never open the AI window after a screenshot",
+                        variable=no_open_var, style="S.TCheckbutton").grid(row=7, column=0, columnspan=2,
+                                                                            sticky="w", pady=(14, 2))
+        tk.Label(t_shot, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(400),
+                 text="On: after a screenshot the AI window does not pop up by itself. The answer is still "
+                      "fetched in the background: open the window with the open/close key to read it, or use "
+                      "the paste / type keys. If the window was already open it stays open."
+                 ).grid(row=8, column=0, columnspan=2, sticky="w")
 
         # ================= Fun tab =================
         horse_var = tk.BooleanVar(value=bool(self.cfg.get("fun_horse", False)))
@@ -3685,6 +4641,8 @@ class AIWindow:
             self.cfg["screenshot_mode"] = MODE_BY_LABEL.get(mode1_var.get(), "area")
             self.cfg["screenshot2_mode"] = MODE_BY_LABEL.get(mode2_var.get(), "full")
             self.cfg["screenshot_keep_focus"] = bool(keep_focus_var.get())
+            self.cfg["screenshot_no_open"] = bool(no_open_var.get())
+            self.cfg["open_on_start"] = bool(open_start_var.get())
             self.cfg["persona"] = persona_var.get() if persona_var.get() in PERSONAS else "Default"
             self.cfg["custom_persona"] = custom_persona_var.get().strip()
             self.cfg["custom_colors"] = list(custom_saved)
@@ -3772,6 +4730,18 @@ class AIWindow:
             mode1_var.set(MODE_LABELS[DEFAULTS["screenshot_mode"]])
             mode2_var.set(MODE_LABELS[DEFAULTS["screenshot2_mode"]])
             keep_focus_var.set(DEFAULTS["screenshot_keep_focus"])
+            no_open_var.set(DEFAULTS["screenshot_no_open"])
+            open_start_var.set(DEFAULTS["open_on_start"])
+            smoke_var.set(DEFAULTS["menu_smoke"])
+            outline_var.set(DEFAULTS["outline_enabled"])
+            outline_follow_top_bar()
+            outline_width_var.set(DEFAULTS["outline_width"])
+            anim_open_var.set(DEFAULTS["anim_open"])
+            anim_close_var.set(DEFAULTS["anim_close"])
+            anim_ease_var.set(DEFAULTS["anim_ease"])
+            anim_ms_var.set(DEFAULTS["anim_ms"])
+            anim_menus_var.set(DEFAULTS["anim_menus"])
+            smoke_speed_var.set(DEFAULTS["smoke_speed"])
 
             # ---- Fun tab (turning these off also stops the horse / jump scare right away) ----
             horse_var.set(DEFAULTS["fun_horse"])
@@ -3795,16 +4765,17 @@ class AIWindow:
 
         btns = tk.Frame(win, bg=MENU_BG)
         btns.pack(side="bottom", pady=10)
+        win._smoke.see_through(btns)  # no box / outline behind the buttons
         nb.pack(fill="both", expand=True, padx=8, pady=(8, 0))
         tk.Button(btns, text="Save", bg=MENU_BUTTON, fg=MENU_FG, activebackground=MENU_BUTTON_ACTIVE,
-                  activeforeground=MENU_FG, relief="flat", padx=12,
+                  activeforeground=MENU_FG, relief="flat", bd=0, highlightthickness=0, padx=12,
                   command=save_and_close).pack(side="left", padx=4)
         reset_btn = tk.Button(btns, text="Reset everything", bg=MENU_BUTTON, fg=MENU_FG,
-                              activebackground=MENU_BUTTON_ACTIVE, activeforeground=MENU_FG, relief="flat",
+                              activebackground=MENU_BUTTON_ACTIVE, activeforeground=MENU_FG, relief="flat", bd=0, highlightthickness=0,
                               padx=12, command=reset_everything)
         reset_btn.pack(side="left", padx=4)
         tk.Button(btns, text="Quit app", bg=MENU_QUIT, fg="white", activebackground="#d33a54",
-                  activeforeground="white", relief="flat", padx=12,
+                  activeforeground="white", relief="flat", bd=0, highlightthickness=0, padx=12,
                   command=lambda: (save_and_close(), self.quit_app())).pack(side="left", padx=4)
 
         self._settings_save = save_and_close
@@ -3812,6 +4783,9 @@ class AIWindow:
         win.bind("<Escape>", lambda _e: save_and_close())
         tk.Label(win, text="Made by Invis", bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8)).place(
             relx=1.0, rely=1.0, x=-10, y=-6, anchor="se")
+        for tab in (t_ai, t_look, t_win, t_keys, t_type, t_shot, t_fun, t_anim):
+            win._smoke.glass_panel(tab.master)  # frosted glass (tab.master = the tab's outlined panel)
+        win._smoke.glass_panel(win)  # (and the top bar, the hint at the bottom ...)
         self._show_popup(win)
 
     # ---------- main loop ----------

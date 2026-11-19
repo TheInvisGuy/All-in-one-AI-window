@@ -1,32 +1,20 @@
 {
-  "version": "AI_W_2.6",
+  "version": "AI_W_2.7",
   "url": "https://raw.githubusercontent.com/TheInvisGuy/All-in-one-AI-window/main/ai_window.py",
-  "sha256": "6b1fb163074d8ad7b6fc174ac2438b6eba49fa55f1063a5ae37c8b2ff90fe5e6",
-  "notes": "Bigger, tidier Save slots menu with aligned buttons; Choose version menu",
+  "sha256": "06a80c10726c721210f107ffc556cf076b403f039e4c0cb26159a251b73447f7",
+  "notes": "Window outline, open/close animations, animated smoke menus, open on start. Versions below 2.6 are no longer offered.",
   "versions": [
+    {
+      "version": "AI_W_2.7",
+      "url": "https://raw.githubusercontent.com/TheInvisGuy/All-in-one-AI-window/main/versions/ai_window_AI_W_2.7.py",
+      "sha256": "06a80c10726c721210f107ffc556cf076b403f039e4c0cb26159a251b73447f7",
+      "notes": "Window outline, open/close animations, animated smoke menus, open on start. Versions below 2.6 are no longer offered."
+    },
     {
       "version": "AI_W_2.6",
       "url": "https://raw.githubusercontent.com/TheInvisGuy/All-in-one-AI-window/main/versions/ai_window_AI_W_2.6.py",
       "sha256": "6b1fb163074d8ad7b6fc174ac2438b6eba49fa55f1063a5ae37c8b2ff90fe5e6",
-      "notes": "Bigger, tidier Save slots menu with aligned buttons; Choose version menu"
-    },
-    {
-      "version": "AI_W_2.5.8",
-      "url": "https://raw.githubusercontent.com/TheInvisGuy/All-in-one-AI-window/main/versions/ai_window_AI_W_2.5.8.py",
-      "sha256": "479940037f746024aaaa424b1a5792ad714a661ea4376520a230346da2a8a349",
-      "notes": "Version picker: choose and install any version (newer or older) from the Shift+M menu"
-    },
-    {
-      "version": "AI_W_2.4.7",
-      "url": "https://raw.githubusercontent.com/TheInvisGuy/All-in-one-AI-window/main/versions/ai_window_AI_W_2.4.7.py",
-      "sha256": "56de461c64f847401e1abef8c24e0f1a52695e9f004f985bf58007333012638f",
-      "notes": "Fix: hotkeys no longer stay paused after Save or Use in the menus"
-    },
-    {
-      "version": "AI_W_2.4.5",
-      "url": "https://raw.githubusercontent.com/TheInvisGuy/All-in-one-AI-window/main/versions/ai_window_AI_W_2.4.5.py",
-      "sha256": "32ac05528efd71f85a12b4fc8856f124890d2120714953c9b77f25245fde9278",
-      "notes": "Update button and install-from-GitHub added"
+      "notes": "Version 2.6."
     }
   ]
 }
