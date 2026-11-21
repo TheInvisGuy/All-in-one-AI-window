@@ -10,7 +10,13 @@ Shift+N -> a second screenshot key, e.g. whole screen when Shift+X is 'select ar
 Shift+L -> quit the program
 Shift+V -> paste the AI's last answer into the app/text field you're in
 Shift+B -> TYPE the AI's last answer letter by letter (delay set in Settings > Typing; Esc stops it)
+Shift+T -> start a NEW CHAT (a fresh tab; the tabs, Reset and Save buttons are above the chat)
 Ctrl+Alt+Shift+Q -> emergency quit
+
+Also: answers stream in while they are written (Shift+M > Stream), every answer has Copy / Regenerate and
+every code block a Copy code button, Shift+C can offer quick actions (Explain, Translate, Fix grammar ... and
+"replace my selection"; off by default, Shift+M > Actions), screenshots can be read with local OCR (tesseract;
+off by default), and the Fun tab has an ADHD mode (confetti).
 
 How it works (why it works everywhere):
     * Hotkeys are read straight from the keyboard device (/dev/input) with evdev,
@@ -20,8 +26,8 @@ How it works (why it works everywhere):
     * Shift+V puts the answer on the clipboard and types Ctrl+V through a
       virtual keyboard (/dev/uinput).
 
-IMPORTANT: while this script runs, Shift+Z/C/X/V/B/M/L are "eaten" by it, so you
-cannot type capital Z, C, X, V, B, M or L with Shift in OTHER apps. (Inside the AI window
+IMPORTANT: while this script runs, Shift+Z/C/X/V/B/M/T/L are "eaten" by it, so you
+cannot type capital Z, C, X, V, B, M, T or L with Shift in OTHER apps. (Inside the AI window
 most hotkeys are paused while the cursor is in its text boxes; Shift+Z still works.) Use Caps Lock for those letters,
 or change MODIFIERS below (for example {"shift", "alt"}).
 
@@ -77,7 +83,7 @@ CONFIG_FILE = os.path.join(_APP_DIR, "ai_window_config.json")
 # ---------------------------------------------------------------------------
 MODIFIERS = {"shift"}  # any of: "shift", "ctrl", "alt", "meta"  (exactly these must be held)
 LETTERS = {"toggle": "Z", "settings": "M", "ask": "C", "screenshot": "X", "screenshot2": "N",
-           "paste": "V", "type": "B", "quit": "L"}
+           "paste": "V", "type": "B", "newchat": "T", "quit": "L"}
 
 MOD_GROUPS = {
     "shift": {e.KEY_LEFTSHIFT, e.KEY_RIGHTSHIFT},
@@ -99,6 +105,7 @@ ACTION_LABELS = {
     "screenshot2": "Screenshot key 2 -> AI",
     "paste": "Paste last answer",
     "type": "Type last answer",
+    "newchat": "New chat (a fresh chat tab)",
     "quit": "Quit the program",
 }
 MOD_LABELS = {"shift": "Shift", "ctrl": "Ctrl", "alt": "Alt", "meta": "Super"}
@@ -196,6 +203,22 @@ THEMES = {
     "Rose": ("#fff0f3", "#e5446d", "#e5446d"),
 }
 
+# Quick actions (Shift+C on highlighted text): the presets. {lang} is replaced by the "translate to" language.
+DEFAULT_QA_ACTIONS = [
+    {"name": "Explain", "prompt": "Explain the following text clearly and simply.", "replace": False},
+    {"name": "Summarize", "prompt": "Summarize the following text in a few short sentences.", "replace": False},
+    {"name": "Translate", "prompt": "Translate the following text into {lang}.", "replace": True},
+    {"name": "Fix grammar", "prompt": "Fix the spelling and grammar of the following text. Keep its meaning "
+                                      "and tone.", "replace": True},
+    {"name": "Rewrite", "prompt": "Rewrite the following text so it is clearer and reads better. Keep its "
+                                  "meaning.", "replace": True},
+]
+QA_MODES = ["Show a menu of actions", "Always run the default action"]
+STREAM_STYLES = ["Typewriter", "Word by word", "Line by line", "As it arrives"]
+STREAM_CURSORS = {"Block": "\u258c", "Dot": "\u25cf", "Underscore": "_", "None": ""}
+OCR_MODES = ["Text only (no picture)", "Picture + text", "Text only if the model can't see pictures"]
+MAX_CHATS = 6
+
 DEFAULTS = {
     "corner": "Bottom Left",
     "offset_x": 20,
@@ -252,12 +275,55 @@ DEFAULTS = {
     "anim_menus": True,               # the menus appear with the same animation
     "smoke_speed": 60,                # speed of the menu smoke (percent)
     "menu_smoke": True,           # menus: moving purple smoke with glass panels (off = plain #3D00A0)
+    "stream_enabled": True,       # show the answer while it is being written (off = all at once)
+    "stream_style": "Typewriter",  # how the text pops up: Typewriter / Word by word / Line by line / As it arrives
+    "stream_speed": 160,          # characters per second (Typewriter and Word by word)
+    "stream_fade": True,          # new text fades in
+    "stream_cursor": "Block",     # the marker at the end of the text while it is written: Block / Dot / Underscore / None
+    "stream_autoscroll": True,    # follow the new text (only while you are at the bottom)
+    "qa_enabled": False,          # quick actions on highlighted text (Shift+C shows a menu of actions)
+    "qa_mode": QA_MODES[0],
+    "qa_default": "Explain",      # used when qa_mode is 'Always run the default action'
+    "qa_replace": False,          # let actions marked 'replace' paste the answer over the highlighted text
+    "qa_translate_to": "English",
+    "qa_actions": copy.deepcopy(DEFAULT_QA_ACTIONS),
+    "ocr_enabled": False,         # read screenshots with tesseract (local OCR) instead of / as well as sending the picture
+    "ocr_mode": OCR_MODES[0],
+    "ocr_lang": "eng",            # tesseract language code(s), e.g. eng, spa, cat or eng+spa
+    "adhd_mode": False,           # confetti where you click and all over the screen when an answer is done
+    "adhd_clicks": True,
+    "adhd_answers": True,
+    "auto_refresh": False,        # when the SAME version gets a new build, install it by itself
+    "last_seen_version": "",      # (the version whose "what's new" you have seen)
+    "show_whats_new": False,      # (set after an update/refresh: show "what's new" at the next start)
+    "update_notes": "",           # (release notes of the update that was just installed)
+    "last_refresh_sha": "",       # (the build the last auto-refresh tried, so it never loops)
     "open_on_start": True,        # open the AI window as soon as the program starts
     "screenshot_no_open": False,  # True = the AI window never opens by itself after a screenshot
     "ui_scale": "auto",           # interface size: auto, or 100% ... 300% (for high-resolution screens)
 }
 
-VERSION = "AI_W_2.7"
+VERSION = "AI_W_2.7.1"
+
+# Shown in the "What's new" window after an update (and listed in the update notes of your version.json).
+WHATS_NEW = {
+    "AI_W_2.7": [
+        "Streaming answers: the words show up while the AI writes them. Shift+M > Stream: choose how the text "
+        "pops up (typewriter, word by word, line by line), the speed, a fade-in, the cursor and auto-scroll.",
+        "Chat tabs: several chats at once, a Reset button and a Save button (Markdown, text or JSON). A new "
+        "hotkey (Shift+T) starts a fresh chat.",
+        "Under every answer: Copy and Regenerate. Code blocks get their own Copy code button.",
+        "Quick actions on highlighted text (off by default): Shift+C offers Explain, Summarize, Translate, "
+        "Fix grammar and Rewrite, and can paste the answer over your selection. Shift+M > Actions.",
+        "Local OCR with tesseract (off by default): screenshots work with models that can't see pictures. "
+        "Shift+M > Screenshot.",
+        "ADHD mode (Fun tab, off by default): confetti where you click, and all over the screen when an "
+        "answer is done. The horse size slider is longer too.",
+        "Refresh: if your version gets a new build, the update area offers to reinstall it (or does it by "
+        "itself if you tick the box).",
+        "The settings tabs open faster, and this window shows what changed after every update.",
+    ],
+}
 
 # ---------------------------------------------------------------------------
 # Updates. The program can look for a newer version and install it from a button in the Shift+M menu.
@@ -295,6 +361,18 @@ def _valid_release(entry):
 MIN_VERSION = (2, 6)   # older versions are not offered any more
 
 
+def local_build_sha():
+    """sha256 of the program file that is running right now (None when unknown, e.g. the packaged program
+    runs its built-in code and there is no file to look at)."""
+    try:
+        if getattr(sys, "frozen", False) and not os.environ.get("AIW_RUNNING_UPDATE"):
+            return None
+        with open(os.path.abspath(__file__), "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        return None
+
+
 def fetch_update_info(manifest_url):
     """Ask the update address for the newest version and the list of all versions (runs in a background
     thread). Returns a dict: state is 'available', 'uptodate' or 'error', plus a message, plus 'versions'
@@ -316,6 +394,11 @@ def fetch_update_info(manifest_url):
     versions = sorted((r for r in releases.values() if version_tuple(r["version"]) >= MIN_VERSION),
                       key=lambda r: version_tuple(r["version"]), reverse=True)
     if version_tuple(latest["version"]) <= version_tuple(VERSION):
+        # the same version number, but the published file is a different one = a new build of this version
+        same, mine = releases.get(VERSION), local_build_sha()
+        if same and mine and mine != same["sha256"]:
+            return {"state": "refresh", "version": VERSION, "url": same["url"], "sha256": same["sha256"],
+                    "notes": same["notes"], "message": "", "versions": versions}
         return {"state": "uptodate", "message": f"{VERSION}: you have the newest version.", "versions": versions}
     return {"state": "available", "version": latest["version"], "url": latest["url"], "sha256": latest["sha256"],
             "notes": latest["notes"], "message": "", "versions": versions}
@@ -441,7 +524,9 @@ COLOR_KEYS = ("bg_color", "header_color", "button_color")
 # has a name, a short description and a photo. Switching slots swaps all of it in one click.
 # Only the interface size stays the same for all slots: it depends on this computer's screen and only
 # applies after a restart.
-SLOT_FIELDS = tuple(k for k in DEFAULTS if k not in ("slots", "active_slot", "ui_scale"))
+GLOBAL_FIELDS = ("slots", "active_slot", "ui_scale", "auto_refresh", "last_seen_version", "show_whats_new",
+                 "update_notes", "last_refresh_sha")
+SLOT_FIELDS = tuple(k for k in DEFAULTS if k not in GLOBAL_FIELDS)
 # the settings the slots held in the first version (older config files only have these in their slots)
 LEGACY_SLOT_FIELDS = ("provider", "providers", "screenshot_prompt", "persona", "custom_persona",
                       "auto_prompt_enabled", "auto_prompt", "bg_color", "header_color", "button_color")
@@ -692,6 +777,10 @@ class SmokeLayer:
         self.glass_items = []     # text on glass panels: each shows its own slice of the frosted picture
         self._glass_on = False
         self._grain = None
+        self.frame = 0            # counts the drawn pictures (the frosted layer is redrawn every second one)
+        self.interval = self.FPS_MS   # time between pictures; grows on a slow computer so the menus stay quick
+        self.pause_until = 0.0    # no drawing until then (a tab was just switched: let the window repaint first)
+        self._crop_budget = 6     # how many texts may switch to their frosted background in one round
         self.t = random.random() * 50
         self.last = time.time()
         self.running = False
@@ -699,6 +788,10 @@ class SmokeLayer:
 
     def enabled(self):
         return bool(self.app.cfg.get("menu_smoke", True))
+
+    def pause(self, ms=250):
+        """Stop drawing for a moment (used when a tab is switched, so opening a tab feels instant)."""
+        self.pause_until = time.time() + ms / 1000.0
 
     def refresh(self):
         """Call after the 'smoke' setting changed: starts / stops the animation."""
@@ -788,7 +881,7 @@ class SmokeLayer:
         it, the smoke shows between its widgets. With the smoke off it just takes the plain background."""
         self._backdrop(frame, glass=False)
 
-    def glass_panel(self, root):
+    def glass_panel(self, root, skip=()):
         """Turn a panel and the text on it into frosted glass: you see the blurred smoke through it.
         (Needs Pillow. Without it, or with the smoke off, the panel keeps its plain tint.)"""
         if _PILImageTk is None or _PILImageFilter is None:
@@ -811,10 +904,11 @@ class SmokeLayer:
             return False
 
         def walk(w):
-            if getattr(w, "_no_recolor", False) or getattr(w, "_backdrop", False):
+            if getattr(w, "_no_recolor", False) or getattr(w, "_backdrop", False) or w in skip:
                 return
             kids = list(w.winfo_children())
-            if is_menu_widget(w):
+            if is_menu_widget(w) and not getattr(w, "_glassed", False):
+                w._glassed = True  # (a window can be walked twice: every widget is only done once)
                 if w.winfo_class() in ("Frame", "TFrame"):
                     self._backdrop(w, glass=True)
                 else:
@@ -852,6 +946,9 @@ class SmokeLayer:
                     if ww - rec["req"][0] > 6 or hh - rec["req"][1] > 6:
                         rec["skip"] = True   # stretched wider than its text: leave it with the plain tint
                         return True
+                    if self._crop_budget <= 0:
+                        return True          # (a few per round, so opening a tab does not freeze the menu)
+                    self._crop_budget -= 1
                     rec["crop"] = tk.PhotoImage(master=self.win, width=ww, height=hh)
                     rec["size"] = (ww, hh)
                     w.configure(image=rec["crop"], compound="center")
@@ -871,6 +968,7 @@ class SmokeLayer:
         self.glass_items.append(rec)
 
     def _update_glass_items(self):
+        self._crop_budget = 6
         keep = []
         for rec in self.glass_items:
             try:
@@ -902,6 +1000,9 @@ class SmokeLayer:
     def _glass_tick(self, small, w, h):
         if not self._glass_on:
             return
+        self.frame += 1
+        if self.glass_photo is not None and self.frame % 2:
+            return  # the frosted layer moves slowly: every second picture is enough (half the work)
         try:
             self._draw_glass(small, w, h)
             self._update_glass_items()
@@ -947,13 +1048,23 @@ class SmokeLayer:
                 self.win.after(self.FPS_MS, self._tick)
                 return
             now = time.time()
+            if now < self.pause_until:
+                self.last = now
+                self.win.after(60, self._tick)
+                return
             speed = min(300, max(20, int(self.app.cfg.get("smoke_speed", 100)))) / 100.0
             self.t += min(0.5, now - self.last) * speed
             self.last = now
             w, h = self.win.winfo_width(), self.win.winfo_height()
+            cost = 0.0
             if w > 50 and h > 50 and self.win.winfo_viewable():
+                t0 = time.time()
                 self._draw(w, h)
-            self.win.after(self.FPS_MS, self._tick)
+                cost = time.time() - t0
+            # a slow computer or a busy menu: draw less often (never fewer than about 3 pictures a second)
+            wanted = min(350, max(self.FPS_MS, int(cost * 1000 * 4)))
+            self.interval = int(self.interval * 0.7 + wanted * 0.3)
+            self.win.after(max(self.FPS_MS, self.interval), self._tick)
         except tk.TclError:
             self.running = False
 
@@ -1004,6 +1115,13 @@ class SmokeLayer:
 def luminance(hex_color):
     r, g, b = (int(hex_color[i:i + 2], 16) / 255 for i in (1, 3, 5))
     return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def blend(c1, c2, t):
+    """A color between two '#rrggbb' colors (t = 0 -> c1, t = 1 -> c2)."""
+    a = [int(c1[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(c2[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#%02x%02x%02x" % tuple(round(x + (y - x) * t) for x, y in zip(a, b))
 
 
 def shade(hex_color, amount):
@@ -1262,6 +1380,229 @@ def ask_ai(provider, key, model, history, system=""):
     if provider == "Gemini":
         return call_gemini(key, model, history, system)
     raise RuntimeError(f"Unknown provider: {provider}")
+
+
+# ---------------------------------------------------------------------------
+# Streaming: the same providers, but the answer is read piece by piece while it is being written.
+# Every stream_* function calls on_text(piece) for each new piece and returns the whole text.
+# ---------------------------------------------------------------------------
+class _StopStream(Exception):
+    """Raised inside a stream callback to stop reading the answer (the Stop button)."""
+
+
+def _sse_data(resp):
+    """The text after 'data:' of every server-sent-event line of a streaming response."""
+    for raw in resp.iter_lines():
+        if not raw:
+            continue
+        line = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
+        if line.startswith("data:"):
+            yield line[5:].strip()
+
+
+def _json_or_none(text):
+    try:
+        return json.loads(text)
+    except ValueError:
+        return None
+
+
+def stream_openai_style(url, key, model, history, system, on_text, cancel):
+    messages = _openai_messages(history)
+    if system:
+        messages.insert(0, {"role": "system", "content": system})
+    resp = requests.post(url, headers={"Authorization": f"Bearer {key}"},
+                         json={"model": model, "messages": messages, "stream": True},
+                         timeout=(15, 90), stream=True)
+    out = []
+    try:
+        _raise_for_status(resp)
+        for data in _sse_data(resp):
+            if cancel.is_set() or data == "[DONE]":
+                break
+            obj = _json_or_none(data)
+            if not isinstance(obj, dict):
+                continue
+            if obj.get("error"):
+                raise RuntimeError(str(obj["error"])[:300])
+            for choice in obj.get("choices") or []:
+                piece = (choice.get("delta") or {}).get("content")
+                if isinstance(piece, str) and piece:
+                    out.append(piece)
+                    on_text(piece)
+    finally:
+        resp.close()
+    return "".join(out)
+
+
+def stream_claude(key, model, history, system, on_text, cancel):
+    body = {"model": model, "max_tokens": 1024, "messages": _claude_messages(history), "stream": True}
+    if system:
+        body["system"] = system
+    resp = requests.post("https://api.anthropic.com/v1/messages",
+                         headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
+                         json=body, timeout=(15, 90), stream=True)
+    out = []
+    try:
+        _raise_for_status(resp)
+        for data in _sse_data(resp):
+            if cancel.is_set():
+                break
+            obj = _json_or_none(data)
+            if not isinstance(obj, dict):
+                continue
+            kind = obj.get("type")
+            if kind == "content_block_delta":
+                delta = obj.get("delta") or {}
+                piece = delta.get("text")
+                if delta.get("type") == "text_delta" and isinstance(piece, str) and piece:
+                    out.append(piece)
+                    on_text(piece)
+            elif kind == "error":
+                raise RuntimeError(str((obj.get("error") or {}).get("message") or obj)[:300])
+            elif kind == "message_stop":
+                break
+    finally:
+        resp.close()
+    return "".join(out)
+
+
+def stream_gemini(key, model, history, system, on_text, cancel):
+    contents = []
+    for m in history:
+        parts = [{"text": m["content"]}]
+        if m.get("image"):
+            parts.insert(0, {"inline_data": {"mime_type": "image/png", "data": m["image"]}})
+        contents.append({"role": "user" if m["role"] == "user" else "model", "parts": parts})
+    body = {"contents": contents}
+    if system:
+        body["system_instruction"] = {"parts": [{"text": system}]}
+    resp = requests.post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse",
+        headers={"x-goog-api-key": key}, json=body, timeout=(15, 90), stream=True)
+    out, feedback = [], None
+    try:
+        _raise_for_status(resp)
+        for data in _sse_data(resp):
+            if cancel.is_set():
+                break
+            obj = _json_or_none(data)
+            if not isinstance(obj, dict):
+                continue
+            if obj.get("error"):
+                raise RuntimeError(str(obj["error"])[:300])
+            feedback = obj.get("promptFeedback") or feedback
+            for cand in obj.get("candidates") or []:
+                for part in (cand.get("content") or {}).get("parts") or []:
+                    piece = part.get("text")
+                    if isinstance(piece, str) and piece and not part.get("thought"):
+                        out.append(piece)
+                        on_text(piece)
+    finally:
+        resp.close()
+    if not "".join(out).strip() and not cancel.is_set():
+        raise RuntimeError(f"Gemini returned no answer ({feedback or 'empty'})"[:300])
+    return "".join(out)
+
+
+def stream_ollama(model, history, system, on_text, cancel):
+    messages = [{"role": "system", "content": system}] if system else []
+    for m in history:
+        msg = {"role": m["role"], "content": m["content"]}
+        if m.get("image"):
+            msg["images"] = [m["image"]]
+        messages.append(msg)
+    try:
+        resp = requests.post("http://localhost:11434/api/chat",
+                             json={"model": model, "messages": messages, "stream": True},
+                             timeout=(15, 300), stream=True)
+    except requests.exceptions.ConnectionError:
+        raise RuntimeError("Can't reach Ollama. Install it from https://ollama.com and make sure "
+                           "it is running (try:  ollama serve).")
+    out = []
+    try:
+        _raise_for_status(resp)
+        for raw in resp.iter_lines():
+            if cancel.is_set():
+                break
+            if not raw:
+                continue
+            obj = _json_or_none(raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw))
+            if not isinstance(obj, dict):
+                continue
+            if obj.get("error"):
+                raise RuntimeError(str(obj["error"])[:300])
+            piece = (obj.get("message") or {}).get("content")
+            if isinstance(piece, str) and piece:
+                out.append(piece)
+                on_text(piece)
+            if obj.get("done"):
+                break
+    finally:
+        resp.close()
+    return "".join(out)
+
+
+def stream_ai(provider, key, model, history, system, on_text, cancel):
+    """Like ask_ai, but calls on_text(piece) while the answer is being written. The command-line tools
+    can't stream, so their whole answer arrives as one piece (the window still types it out)."""
+    if provider in CLI_TOOLS:
+        text = call_cli(provider, model, history, system)
+        if text and not cancel.is_set():
+            on_text(text)
+        return text
+    if provider == "Ollama (local)":
+        return stream_ollama(model, history, system, on_text, cancel)
+    if provider == "ChatGPT":
+        return stream_openai_style("https://api.openai.com/v1/chat/completions", key, model, history, system,
+                                   on_text, cancel)
+    if provider == "Grok":
+        return stream_openai_style("https://api.x.ai/v1/chat/completions", key, model, history, system,
+                                   on_text, cancel)
+    if provider == "Claude":
+        return stream_claude(key, model, history, system, on_text, cancel)
+    if provider == "Gemini":
+        return stream_gemini(key, model, history, system, on_text, cancel)
+    raise RuntimeError(f"Unknown provider: {provider}")
+
+
+# ---------------------------------------------------------------------------
+# Local OCR (tesseract): read the text of a screenshot on this computer
+# ---------------------------------------------------------------------------
+VISION_HINTS = ("llava", "vision", "bakllava", "moondream", "minicpm-v", "gemma3", "qwen2.5vl", "qwen2-vl",
+                "llama4", "mistral-small3")
+
+
+def tesseract_available():
+    return shutil.which("tesseract") is not None
+
+
+def model_sees_images(provider, model):
+    """Can this provider/model read pictures? (The command-line tools can't; for Ollama it depends on the model.)"""
+    if provider in CLI_TOOLS:
+        return False
+    if provider == "Ollama (local)":
+        return any(h in str(model).lower() for h in VISION_HINTS)
+    return True
+
+
+def ocr_png(png, lang="eng"):
+    """The text tesseract finds in a PNG (bytes). Raises RuntimeError with a message that can be shown."""
+    exe = shutil.which("tesseract")
+    if not exe:
+        raise RuntimeError("tesseract is not installed. Install it with:  sudo apt install tesseract-ocr")
+    lang = str(lang or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_+]{2,40}", lang):
+        lang = "eng"
+    try:
+        r = subprocess.run([exe, "stdin", "stdout", "-l", lang], input=png, capture_output=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("tesseract took too long.") from None
+    if r.returncode != 0:
+        detail = (r.stderr or b"").decode("utf-8", "replace").strip()[:200]
+        raise RuntimeError(f"tesseract failed: {detail or 'unknown error'} "
+                           f"(missing language? try:  sudo apt install tesseract-ocr-{lang.split('+')[0]})")
+    return r.stdout.decode("utf-8", "replace").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -1824,14 +2165,290 @@ class HotkeyEngine:
 # ---------------------------------------------------------------------------
 # The window
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Confetti (ADHD mode) + a watcher for mouse clicks anywhere on the screen
+# ---------------------------------------------------------------------------
+CONFETTI_COLORS = ["#ff4d6d", "#ffd166", "#06d6a0", "#4cc9f0", "#b388ff", "#ff9f1c", "#f72585", "#ffffff"]
+
+
+class Confetti:
+    """Confetti made of tiny always-on-top windows. (A window on Linux can't be see-through per pixel, so a big
+    see-through overlay is not possible: every piece of confetti is its own little window instead.)"""
+    MAX_LIVE = 90
+
+    def __init__(self, root):
+        self.root = root
+        self.pool = []   # hidden windows ready to be used again
+        self.live = []   # the pieces on screen
+        self.job = None
+        self.last = 0.0
+
+    def _window(self):
+        while self.pool:
+            win = self.pool.pop()
+            try:
+                if win.winfo_exists():
+                    return win
+            except tk.TclError:
+                pass
+        win = tk.Toplevel(self.root)
+        win.withdraw()
+        win.overrideredirect(True)  # no frame, and it never takes the keyboard focus
+        win.attributes("-topmost", True)
+        return win
+
+    def _spawn(self, x, y, vx, vy, life):
+        if len(self.live) >= self.MAX_LIVE:
+            return
+        try:
+            win = self._window()
+            size = max(4, round(random.randint(5, 10) * UI_SCALE[0]))
+            w, h = size, max(3, size - random.randint(0, 3))
+            win.configure(bg=random.choice(CONFETTI_COLORS))
+            win.geometry(f"{w}x{h}+{int(x)}+{int(y)}")
+            win.deiconify()
+        except tk.TclError:
+            return
+        self.live.append({"win": win, "x": float(x), "y": float(y), "vx": vx, "vy": vy, "age": 0.0, "life": life})
+
+    def _retire(self, win):
+        try:
+            win.withdraw()
+            if len(self.pool) < 120:
+                self.pool.append(win)
+            else:
+                win.destroy()
+        except tk.TclError:
+            pass
+
+    def _ensure(self):
+        if self.job is None:
+            self.last = time.time()
+            self.job = self.root.after(33, self._tick)
+
+    def _tick(self):
+        self.job = None
+        now = time.time()
+        dt = min(0.08, now - self.last)
+        self.last = now
+        try:
+            sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        except tk.TclError:
+            return
+        s = UI_SCALE[0]
+        keep = []
+        for pc in self.live:
+            pc["age"] += dt
+            pc["vy"] += 900 * s * dt                      # gravity
+            pc["vx"] *= max(0.0, 1.0 - 1.2 * dt)          # air drag
+            pc["x"] += pc["vx"] * dt
+            pc["y"] += pc["vy"] * dt
+            if pc["age"] > pc["life"] or pc["y"] > sh or pc["x"] < -20 or pc["x"] > sw + 20:
+                self._retire(pc["win"])
+                continue
+            try:
+                pc["win"].geometry(f"+{int(pc['x'])}+{int(pc['y'])}")
+            except tk.TclError:
+                continue
+            keep.append(pc)
+        self.live = keep
+        if keep:
+            self.job = self.root.after(33, self._tick)
+
+    def burst(self, x, y, n=14):
+        """Confetti popping out of one point."""
+        s = UI_SCALE[0]
+        for _ in range(n):
+            ang = random.uniform(0, 2 * math.pi)
+            speed = random.uniform(150, 480) * s
+            self._spawn(x + random.uniform(-6, 6), y + random.uniform(-6, 6), math.cos(ang) * speed,
+                        math.sin(ang) * speed - 220 * s, random.uniform(0.9, 1.6))
+        self._ensure()
+
+    def everywhere(self, bursts=7, per=11):
+        """Confetti popping all over the screen."""
+        try:
+            sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        except tk.TclError:
+            return
+        for k in range(bursts):
+            self.root.after(k * 110, lambda: self.burst(random.uniform(0.08, 0.92) * sw,
+                                                        random.uniform(0.15, 0.65) * sh, per))
+
+    def clear(self):
+        if self.job is not None:
+            try:
+                self.root.after_cancel(self.job)
+            except tk.TclError:
+                pass
+            self.job = None
+        for pc in self.live:
+            self._retire(pc["win"])
+        self.live = []
+        for win in self.pool:
+            try:
+                win.destroy()
+            except tk.TclError:
+                pass
+        self.pool = []
+
+
+class MouseWatcher:
+    """Tells us when a mouse button is pressed anywhere on the screen. It only LISTENS to the mouse
+    devices (it never grabs them, so the mouse keeps working normally)."""
+
+    def __init__(self, on_click):
+        self.on_click = on_click  # called from the watcher thread
+        self.stop_flag = threading.Event()
+        self.thread = None
+        self.last = 0.0
+
+    def start(self):
+        if self.thread is not None and self.thread.is_alive():
+            if not self.stop_flag.is_set():
+                return
+            self.thread.join(0.6)  # it was told to stop a moment ago: wait for it, then start a new one
+        self.stop_flag = threading.Event()
+        self.thread = threading.Thread(target=self._run, args=(self.stop_flag,), daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self.stop_flag.set()
+
+    @staticmethod
+    def _find():
+        devs = []
+        for path in evdev.list_devices():
+            try:
+                d = evdev.InputDevice(path)
+            except OSError:
+                continue
+            caps = d.capabilities()
+            if (e.BTN_LEFT in caps.get(e.EV_KEY, []) and (e.EV_REL in caps or e.EV_ABS in caps)
+                    and not d.name.startswith("ai-window")):
+                devs.append(d)
+            else:
+                d.close()
+        return devs
+
+    def _run(self, flag):
+        import selectors
+        devs = self._find()
+        if not devs:
+            print("[adhd] no readable mouse found (confetti on clicks needs access to /dev/input)")
+            return
+        sel = selectors.DefaultSelector()
+        for d in devs:
+            sel.register(d, selectors.EVENT_READ)
+        try:
+            while not flag.is_set():
+                for key, _mask in sel.select(timeout=0.3):
+                    dev = key.fileobj
+                    try:
+                        for ev in dev.read():
+                            if ev.type == e.EV_KEY and ev.value == 1 and ev.code in (e.BTN_LEFT, e.BTN_RIGHT):
+                                now = time.time()
+                                if now - self.last > 0.08:
+                                    self.last = now
+                                    self.on_click()
+                    except BlockingIOError:
+                        pass
+                    except OSError:  # unplugged
+                        try:
+                            sel.unregister(dev)
+                        except (KeyError, ValueError):
+                            pass
+        finally:
+            for d in devs:
+                try:
+                    d.close()
+                except OSError:
+                    pass
+
+
+# ---------------------------------------------------------------------------
+# Chats (the tabs of the AI window)
+# ---------------------------------------------------------------------------
+class Chat:
+    """One conversation = one tab: its own text box, history and state."""
+
+    def __init__(self, name):
+        self.name = name
+        self.title = ""           # taken from the first question
+        self.history = []
+        self.last_answer = ""
+        self.text = None          # the tk.Text that shows this chat
+        self.gen = 0              # +1 when the chat is reset / closed: answers still on their way are thrown away
+        self.busy = False         # an answer is being fetched
+        self.cancel = threading.Event()
+        self.stream = None        # live state while an answer is being streamed
+        self.unread = False       # an answer arrived while another tab was open
+        self.link_n = 0           # counter for the names of the clickable Copy / Regenerate texts
+        self.replace_pending = False  # paste the next answer over the highlighted text (quick actions)
+
+
+class _Md:
+    """Draws an AI answer one line at a time (so the same code serves finished answers and streamed ones):
+    **bold**, *italic*, `code`, headings, bullets and code blocks (with a Copy code link)."""
+
+    def __init__(self, app, chat):
+        self.app, self.chat = app, chat
+        self.in_code = False
+        self.code = []
+
+    def line(self, line):
+        t = self.chat.text
+        if line.strip().startswith("```"):
+            if self.in_code:
+                self._end_code()
+            else:
+                self.in_code = True
+                self.code = []
+            return
+        if self.in_code:
+            self.code.append(line)
+            t.insert("end", line + "\n", ("codeblock",))
+            return
+        head = re.match(r"^#{1,6}\s+(.*)$", line)
+        if head:
+            self.app._insert_inline(head.group(1), ("ai", "heading"), t)
+        elif re.match(r"^\s*([-*_])(\s*\1){2,}\s*$", line):  # --- / *** separator
+            t.insert("end", "\u2500" * 24, ("ai",))
+        else:
+            bullet = re.match(r"^(\s*)[-*+]\s+(.*)$", line)
+            if bullet:
+                line = bullet.group(1) + "\u2022 " + bullet.group(2)
+            self.app._insert_inline(line, ("ai",), t)
+        t.insert("end", "\n", ("ai",))
+
+    def _end_code(self):
+        self.in_code = False
+        code, self.code = "\n".join(self.code), []
+        if code.strip():
+            self.app._insert_link(self.chat, "Copy code", lambda c=code: self.app._copy_text(c),
+                                  ("codelink",), flash="Copied \u2713")
+            self.chat.text.insert("end", "\n", ("ai",))
+
+    def finish(self):
+        if self.in_code:
+            self._end_code()
+
+
 class AIWindow:
     def __init__(self):
         self.cfg = load_config()
         LETTERS.update(self.cfg["keys"])
         MODIFIERS.clear()
         MODIFIERS.update(self.cfg["modifiers"])
-        self.history = []
-        self.last_answer = ""
+        self.chats = []              # the chat tabs (see class Chat); the open one is chats[cur]
+        self.cur = 0
+        self.chat_counter = 0
+        self._pal = None             # the colors of the current theme (filled in by apply_theme)
+        self.confetti = None         # ADHD mode: the confetti maker
+        self.mouse_watcher = None    # ADHD mode: tells us about mouse clicks
+        self._cfg_existed = os.path.exists(CONFIG_FILE)  # (a brand-new install does not need a "what's new")
+        self._whats_new_win = None
+        self._qa_win = None          # the quick-actions menu while it is open
         self.settings_win = None
         self.slots_win = None        # the save-slots menu (Shift+M)
         self.slot_edit_win = None    # the editor for one slot
@@ -1871,8 +2488,11 @@ class AIWindow:
         self.provider_label = tk.Label(self.header, bg=ACCENT, fg="#e0d8ff", font=("Sans", 8))
         self.provider_label.pack(side="right", padx=8)
 
-        self.chat = tk.Text(self.root, wrap="word", bd=0, padx=10, pady=8, font=("Sans", 10),
-                            height=4, width=20, state="disabled", highlightthickness=0)
+        # the row of chat tabs (and the + / Reset / Save buttons)
+        self.tabbar = tk.Frame(self.root)
+        self.tabbar.pack(fill="x")
+        self.chats.append(self._new_chat_object())
+        self.chat = self.chats[0].text   # (always the text box of the open chat)
 
         # the input row is packed BEFORE the chat area, so it always keeps its space
         self.bottom = tk.Frame(self.root)
@@ -1881,7 +2501,7 @@ class AIWindow:
         self.entry.pack(side="left", fill="x", expand=True, ipady=6)
         self.entry.bind("<Return>", self.send)
         self.send_btn = tk.Button(self.bottom, text="Send", relief="flat",
-                                  command=self.send, padx=10)
+                                  command=self._send_or_stop, padx=10)
         self.send_btn.pack(side="right", padx=(6, 0))
         self.chat.pack(fill="both", expand=True)
 
@@ -1893,12 +2513,11 @@ class AIWindow:
             w.bind("<Button-1>", self._drag_start)
             w.bind("<B1-Motion>", self._drag_move)
             w.bind("<ButtonRelease-1>", self._drag_end)
-        self.chat.bind("<ButtonRelease-1>",
-                       lambda ev: None if self.chat.tag_ranges("sel") else self.entry.focus_set())
         self.root.bind("<Escape>", lambda ev: self.hide())
 
         self.append("sys", f"{label('ask')} ask about highlighted text · {label('screenshot')} / {label('screenshot2')} screenshot · "
                            f"{label('paste')} paste answer · {label('type')} type answer · "
+                           f"{label('newchat')} new chat · "
                            f"{label('settings')} menu · {label('quit')} quit · Esc hide\n\n")
 
         self.apply_geometry()
@@ -1921,6 +2540,7 @@ class AIWindow:
         self.root.after(1500, self.send_auto_prompt)
         self.root.after(900, self.apply_fun)
         self.root.after(5000, self.check_update_async)  # quietly look for a newer version
+        self.root.after(2500, self._maybe_whats_new)    # after an update: what changed
 
     def _build_actions(self):
         def thread(fn):
@@ -1934,6 +2554,7 @@ class AIWindow:
             key_code("screenshot2"): thread(lambda: self.ask_screenshot(2)),
             key_code("paste"): thread(self.paste_answer),
             key_code("type"): thread(self.type_answer),
+            key_code("newchat"): lambda: self.ui(self.new_chat_hotkey),
             key_code("quit"): lambda: self.ui(self.quit_app),
         }
 
@@ -2021,26 +2642,20 @@ class AIWindow:
                                 activeforeground=btn_fg)
         self.root.configure(bg=bg)
         self.bottom.configure(bg=bg)
-        self.chat.configure(bg=bg, fg=fg)
-        self.chat.tag_config("user", foreground="#9fb4ff" if dark else "#2a49c9")
-        self.chat.tag_config("ai", foreground=fg)
-        self.chat.tag_config("sys", foreground="#8a8a8a")
         try:
             size = min(24, max(7, int(self.cfg.get("font_size", DEFAULTS["font_size"]))))
         except (TypeError, ValueError):
             size = DEFAULTS["font_size"]
-        self.chat.configure(font=("Sans", size))
+        self._pal = {"bg": bg, "fg": fg, "input_bg": input_bg, "dark": dark, "size": size, "hdr": hdr,
+                     "hdr_fg": hdr_fg, "btn": btn}
+        for c in self.chats:
+            self._style_chat(c.text)
         self.entry.configure(font=("Sans", size))
         self.send_btn.configure(font=("Sans", size))
-        self.chat.tag_config("bold", font=("Sans", size, "bold"))
-        self.chat.tag_config("italic", font=("Sans", size, "italic"))
-        self.chat.tag_config("bolditalic", font=("Sans", size, "bold italic"))
-        self.chat.tag_config("heading", font=("Sans", size + 1, "bold"))
-        self.chat.tag_config("code", font=("Monospace", max(6, size - 1)), background=input_bg)
-        self.chat.tag_config("codeblock", font=("Monospace", max(6, size - 1)), background=input_bg,
-                             lmargin1=8, lmargin2=8)
         self.entry.configure(bg=input_bg, fg=fg, insertbackground=fg, highlightthickness=1,
                              highlightbackground=border, highlightcolor=btn)
+        self.tabbar.configure(bg=bg)
+        self._rebuild_tabs()
         self.apply_outline()
 
     def persona_text(self):
@@ -2118,7 +2733,8 @@ class AIWindow:
         """The purple look of the menus, scaled for this screen."""
         style = ttk.Style(win)
         try:
-            style.theme_use("clam")  # the plain default theme ignores most colors
+            if style.theme_use() != "clam":
+                style.theme_use("clam")  # the plain default theme ignores most colors
         except tk.TclError:
             pass
         arrow = S(14)
@@ -2131,7 +2747,7 @@ class AIWindow:
                   indicatorbackground=[("active", MENU_FIELD), ("pressed", MENU_FIELD)])
         style.configure("TNotebook", background=MENU_BG, borderwidth=0, bordercolor=MENU_BG,
                         lightcolor=MENU_BG, darkcolor=MENU_BG)
-        style.configure("TNotebook.Tab", background=MENU_TAB, foreground=MENU_FG, padding=(S(8), S(4)),
+        style.configure("TNotebook.Tab", background=MENU_TAB, foreground=MENU_FG, padding=(S(6), S(4)),
                         borderwidth=0, bordercolor=MENU_TAB, lightcolor=MENU_TAB, darkcolor=MENU_TAB,
                         focuscolor=MENU_TAB)
         style.map("TNotebook.Tab", background=[("selected", MENU_BUTTON), ("active", MENU_BUTTON_ACTIVE)],
@@ -2220,6 +2836,17 @@ class AIWindow:
             width = DEFAULTS["outline_width"]
         return S(width), color
 
+    def _outline_chat(self, t):
+        thick, color = self._outline()
+        try:
+            if thick:
+                t.configure(highlightthickness=max(1, thick // 2 or 1), highlightbackground=color,
+                            highlightcolor=color)
+            else:
+                t.configure(highlightthickness=0)
+        except tk.TclError:
+            pass
+
     def _outline_popup(self, win):
         thick, color = self._outline()
         win.configure(highlightthickness=thick, highlightbackground=color, highlightcolor=color)
@@ -2232,10 +2859,8 @@ class AIWindow:
             if thick:
                 self.entry.configure(highlightthickness=max(1, thick), highlightbackground=color,
                                      highlightcolor=color)
-                self.chat.configure(highlightthickness=max(1, thick // 2 or 1), highlightbackground=color,
-                                    highlightcolor=color)
-            else:
-                self.chat.configure(highlightthickness=0)
+            for c in self.chats:
+                self._outline_chat(c.text)
         except tk.TclError:
             pass
         for win in list(self._open_popups):
@@ -2673,131 +3298,819 @@ class AIWindow:
             self.show_no_focus()
 
     def quit_app(self):
+        try:
+            if self.mouse_watcher is not None:
+                self.mouse_watcher.stop()
+            if self.confetti is not None:
+                self.confetti.clear()
+        except tk.TclError:
+            pass
         self.engine.shutdown()
         self.root.destroy()
 
-    # ---------- chat ----------
-    def append(self, tag, text):
-        self.chat.config(state="normal")
-        self.chat.insert("end", text, tag)
-        self.chat.see("end")
-        self.chat.config(state="disabled")
+    # ---------- chat tabs ----------
+    @property
+    def cur_chat(self):
+        return self.chats[self.cur]
+
+    @property
+    def history(self):
+        return self.cur_chat.history
+
+    @property
+    def last_answer(self):
+        return self.cur_chat.last_answer
+
+    @last_answer.setter
+    def last_answer(self, value):
+        self.cur_chat.last_answer = value
+
+    def _new_chat_object(self):
+        self.chat_counter += 1
+        chat = Chat(f"Chat {self.chat_counter}")
+        chat.text = tk.Text(self.root, wrap="word", bd=0, padx=10, pady=8, font=("Sans", 10),
+                            height=4, width=20, state="disabled", highlightthickness=0)
+        chat.text.bind("<ButtonRelease-1>",
+                       lambda ev, t=chat.text: None if t.tag_ranges("sel") else self.entry.focus_set())
+        if self._pal:
+            self._style_chat(chat.text)
+            self._outline_chat(chat.text)
+        return chat
+
+    def _style_chat(self, t):
+        """Colors, fonts and text styles of one chat box (called for every chat when the theme changes)."""
+        p = self._pal
+        bg, fg, ibg, dark, size = p["bg"], p["fg"], p["input_bg"], p["dark"], p["size"]
+        t.configure(bg=bg, fg=fg, font=("Sans", size))
+        t.tag_config("user", foreground="#9fb4ff" if dark else "#2a49c9")
+        t.tag_config("ai", foreground=fg)
+        t.tag_config("sys", foreground="#8a8a8a")
+        t.tag_config("thinking", foreground="#8a8a8a", font=("Sans", size, "italic"))
+        t.tag_config("bold", font=("Sans", size, "bold"))
+        t.tag_config("italic", font=("Sans", size, "italic"))
+        t.tag_config("bolditalic", font=("Sans", size, "bold italic"))
+        t.tag_config("heading", font=("Sans", size + 1, "bold"))
+        t.tag_config("code", font=("Monospace", max(6, size - 1)), background=ibg)
+        t.tag_config("codeblock", font=("Monospace", max(6, size - 1)), background=ibg, lmargin1=8, lmargin2=8)
+        link = "#b8a6ff" if dark else "#3b2bb5"
+        t.tag_config("link", foreground=link, underline=True, font=("Sans", max(6, size - 2)))
+        t.tag_config("scursor", foreground=link)
+        t.tag_config("fadeA", foreground=blend(bg, fg, 0.30))   # new text starts dim ...
+        t.tag_config("fadeB", foreground=blend(bg, fg, 0.65))   # ... and brightens
+        t.tag_raise("fadeA")
+        t.tag_raise("fadeB")
+
+    def _rebuild_tabs(self):
+        """(Re)draw the row of chat tabs: [tab] [tab] ...            [+] [Reset] [Save]"""
+        p, bar = self._pal, self.tabbar
+        if not p:
+            return
+        try:
+            for w in bar.winfo_children():
+                w.destroy()
+            bar.configure(bg=p["bg"])
+            font = ("Sans", max(7, p["size"] - 1))
+
+            def button(text, command):
+                b = tk.Label(bar, text=text, bg=p["input_bg"], fg=p["fg"], font=font, padx=7, pady=1,
+                             cursor="hand2")
+                b.pack(side="right", padx=(0, 3), pady=3)
+                b.bind("<Button-1>", lambda _e: command())
+
+            button("Save", self.export_chat)      # (packed first so they are never squeezed out)
+            button("Reset", self.reset_chat)
+            button("+", self.new_chat)
+            compact = len(self.chats) > 3
+            for i, c in enumerate(self.chats):
+                active = i == self.cur
+                bgc = p["hdr"] if active else p["input_bg"]
+                fgc = p["hdr_fg"] if active else p["fg"]
+                tab = tk.Frame(bar, bg=bgc)
+                tab.pack(side="left", padx=(3, 0), pady=3)
+                mark = "\u25cf " if c.busy else ("\u2022 " if c.unread else "")
+                if compact and not active:
+                    name = str(i + 1)
+                else:
+                    name = c.title or c.name
+                    name = name if len(name) <= 12 else name[:11] + "\u2026"
+                lab = tk.Label(tab, text=mark + name, bg=bgc, fg=fgc, font=font, padx=6, pady=1, cursor="hand2")
+                lab.pack(side="left")
+                lab.bind("<Button-1>", lambda _e, i=i: self.switch_chat(i))
+                if len(self.chats) > 1 and (active or not compact):
+                    x = tk.Label(tab, text="\u00d7", bg=bgc, fg=fgc, font=font, padx=3, pady=1, cursor="hand2")
+                    x.pack(side="left")
+                    x.bind("<Button-1>", lambda _e, i=i: self.close_chat(i))
+        except tk.TclError:
+            pass
+
+    def switch_chat(self, i):
+        if i == self.cur or not (0 <= i < len(self.chats)):
+            return
+        self.chats[self.cur].text.pack_forget()
+        self.cur = i
+        c = self.chats[i]
+        c.unread = False
+        self.chat = c.text
+        c.text.pack(fill="both", expand=True)
+        self._sync_send_button()
+        self._rebuild_tabs()
+
+    def new_chat(self):
+        if len(self.chats) >= MAX_CHATS:
+            self.append("sys", f"You can have {MAX_CHATS} chats at once. Close one first (the x on its tab).\n\n")
+            return
+        chat = self._new_chat_object()
+        self.chats.append(chat)
+        self.switch_chat(len(self.chats) - 1)
+        self.append("sys", "New chat. It has its own history: the AI does not see your other chats.\n\n")
+
+    def new_chat_hotkey(self):
+        self.new_chat()
+        self.show_no_focus()
+
+    def _kill_chat(self, chat):
+        """Stop everything that is going on in a chat (an answer on its way, the typing effect)."""
+        chat.gen += 1                  # answers that are still on their way will be thrown away
+        chat.cancel.set()
+        chat.busy = False
+        st, chat.stream = chat.stream, None
+        if st and st.get("job"):
+            try:
+                self.root.after_cancel(st["job"])
+            except tk.TclError:
+                pass
+
+    def close_chat(self, i):
+        if not (0 <= i < len(self.chats)):
+            return
+        if len(self.chats) == 1:
+            self.reset_chat()
+            return
+        chat, open_chat = self.chats[i], self.chats[self.cur]
+        self._kill_chat(chat)
+        if chat is open_chat:
+            chat.text.pack_forget()
+        self.chats.pop(i)
+        try:
+            chat.text.destroy()
+        except tk.TclError:
+            pass
+        if chat is open_chat:
+            self.cur = min(i, len(self.chats) - 1)
+            c = self.chats[self.cur]
+            c.unread = False
+            self.chat = c.text
+            c.text.pack(fill="both", expand=True)
+        else:
+            self.cur = self.chats.index(open_chat)
+        self._sync_send_button()
+        self._rebuild_tabs()
+
+    def reset_chat(self):
+        """The Reset button: empty the open chat (screen and memory) and start again."""
+        c = self.cur_chat
+        self._kill_chat(c)
+        c.history.clear()
+        c.last_answer = ""
+        c.title = ""
+        c.replace_pending = False
+        c.cancel = threading.Event()
+        t = c.text
+        t.config(state="normal")
+        t.delete("1.0", "end")
+        t.config(state="disabled")
+        for tag in t.tag_names():
+            if tag.startswith("lnk"):
+                t.tag_delete(tag)
+        self.append("sys", "Chat reset.\n\n")
+        self._sync_send_button()
+        self._rebuild_tabs()
+
+    def _sync_send_button(self):
+        try:
+            self.send_btn.config(text="Stop" if self.cur_chat.busy else "Send")
+        except tk.TclError:
+            pass
+
+    def _send_or_stop(self):
+        if self.cur_chat.busy:
+            self._stop_chat(self.cur_chat)
+        else:
+            self.send()
+
+    # ---------- save / export a chat ----------
+    def _chat_as_text(self, chat, kind):
+        """The whole chat as Markdown ('md'), plain text ('txt') or JSON ('json'). Screenshots are not included."""
+        msgs = []
+        for m in chat.history:
+            body = m.get("content", "")
+            if m.get("image"):
+                body = "[screenshot] " + body
+            msgs.append({"role": m.get("role", "user"), "content": body})
+        if kind == "json":
+            return json.dumps({"title": chat.title or chat.name, "exported": time.strftime("%Y-%m-%d %H:%M:%S"),
+                               "provider": self.cfg.get("provider", ""), "messages": msgs}, indent=2,
+                              ensure_ascii=False)
+        stamp = time.strftime("%Y-%m-%d %H:%M")
+        name = chat.title or chat.name
+        out = [f"# {name}\n\nSaved {stamp} from AI Window ({self.cfg.get('provider', '')})\n"] if kind == "md" \
+            else [f"{name}\nSaved {stamp} from AI Window ({self.cfg.get('provider', '')})\n"]
+        for m in msgs:
+            who = "You" if m["role"] == "user" else "AI"
+            out.append(f"**{who}:**\n\n{m['content']}\n\n---\n" if kind == "md" else f"{who}: {m['content']}\n")
+        return "\n".join(out)
+
+    def export_chat(self):
+        c = self.cur_chat
+        if not c.history:
+            self.append("sys", "Nothing to save yet: this chat is empty.\n\n")
+            return
+        base = re.sub(r"[^A-Za-z0-9_-]+", "-", c.title or c.name).strip("-") or "chat"
+        was_top = True
+        try:
+            self.root.attributes("-topmost", False)  # (so the file dialog is not hidden behind this window)
+        except tk.TclError:
+            was_top = False
+        try:
+            path = filedialog.asksaveasfilename(
+                parent=self.root, title="Save chat", initialdir=os.path.expanduser("~"),
+                initialfile=f"{base}-{time.strftime('%Y-%m-%d_%H-%M')}.md", defaultextension=".md",
+                filetypes=[("Markdown", "*.md"), ("Text", "*.txt"), ("JSON", "*.json")])
+        finally:
+            if was_top:
+                try:
+                    self.root.attributes("-topmost", True)
+                except tk.TclError:
+                    pass
+        if not path:
+            return
+        kind = {".txt": "txt", ".json": "json"}.get(os.path.splitext(path)[1].lower(), "md")
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(self._chat_as_text(c, kind))
+        except OSError as err:
+            self.append("sys", f"Could not save the chat ({err.__class__.__name__}).\n\n")
+            return
+        self.append("sys", f"Chat saved: {path}\n\n")
+
+    # ---------- chat text ----------
+    def append(self, tag, text, chat=None):
+        t = (chat or self.cur_chat).text
+        t.config(state="normal")
+        t.insert("end", text, tag)
+        t.see("end")
+        t.config(state="disabled")
+
+    def _copy_text(self, text):
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+        except tk.TclError:
+            pass
+
+        def push():  # also give it to the system clipboard programs, so it stays after this program closes
+            _push(["xclip", "-selection", "clipboard", "-i"], text)
+            if ON_WAYLAND and not IS_GNOME:
+                _push(["wl-copy"], text)
+
+        threading.Thread(target=push, daemon=True).start()
+
+    # ---------- clickable texts under the answers (Copy, Regenerate, Copy code) ----------
+    def _insert_link(self, chat, text, command, extra=(), flash=None):
+        t = chat.text
+        chat.link_n += 1
+        tag = f"lnk{chat.link_n}"
+        t.insert("end", text, ("link", tag) + tuple(extra))
+
+        def click(_e=None):
+            command()
+            if flash:
+                self._flash_link(chat, tag, text, flash)
+
+        t.tag_bind(tag, "<Button-1>", click)
+        t.tag_bind(tag, "<Enter>", lambda _e: t.config(cursor="hand2"))
+        t.tag_bind(tag, "<Leave>", lambda _e: t.config(cursor=""))
+        return tag
+
+    def _flash_link(self, chat, tag, old, new):
+        """A link says 'Copied' for a moment."""
+        t = chat.text
+
+        def swap(txt):
+            try:
+                rng = t.tag_ranges(tag)
+                if len(rng) < 2:
+                    return False
+                a, b = rng[0], rng[1]
+                tags = tuple(x for x in t.tag_names(a) if x != "sel")
+                t.config(state="normal")
+                t.delete(a, b)
+                t.insert(a, txt, tags)
+                t.config(state="disabled")
+                return True
+            except tk.TclError:
+                return False
+
+        if swap(new):
+            t.after(1300, lambda: swap(old))
+
+    def _remove_regen(self, chat):
+        """Only the newest answer keeps its Regenerate link."""
+        t = chat.text
+        rng = t.tag_ranges("regen")
+        for i in range(len(rng) - 2, -2, -2):
+            t.delete(rng[i], rng[i + 1])
+        for tag in t.tag_names():
+            if tag.startswith("lnk") and not t.tag_ranges(tag):
+                t.tag_delete(tag)
+
+    def _answer_links(self, chat, reply):
+        """The 'Copy  Regenerate' line under an answer (the chat box must be in 'normal' state)."""
+        t = chat.text
+        self._remove_regen(chat)
+        self._insert_link(chat, "Copy", lambda r=reply: self._copy_text(r), ("copylink",), flash="Copied \u2713")
+        t.insert("end", "    ", ("ai",))
+        self._insert_link(chat, "Regenerate", lambda c=chat: self._regenerate(c), ("regen",))
+        t.insert("end", "\n\n", ("ai",))
+
+    def _regenerate(self, chat):
+        """Ask the AI the same question again (with the current model / persona) and replace the answer."""
+        h = chat.history
+        if chat.busy or len(h) < 2 or h[-1].get("role") != "assistant" or h[-2].get("role") != "user":
+            return
+        h.pop()
+        chat.last_answer = next((m["content"] for m in reversed(h) if m.get("role") == "assistant"), "")
+        t = chat.text
+        t.config(state="normal")
+        try:
+            t.delete("ans_start", "end-1c")
+        except tk.TclError:
+            pass
+        t.config(state="disabled")
+        self._start_reply(chat, h[-1], keep_msg=True)
 
     # ---------- formatted AI answers ----------
-    def _insert_inline(self, text, base):
+    def _insert_inline(self, text, base, t=None):
         """Insert one line, turning **bold**, *italic*, `code` into styled text."""
+        t = t or self.chat
         text = LINK_RE.sub(r"\1 (\2)", text)
         pos = 0
         for m in INLINE_RE.finditer(text):
             if m.start() > pos:
-                self.chat.insert("end", text[pos:m.start()], base)
+                t.insert("end", text[pos:m.start()], base)
             tok = m.group(0)
             if tok.startswith("***"):
-                self.chat.insert("end", tok[3:-3], base + ("bolditalic",))
+                t.insert("end", tok[3:-3], base + ("bolditalic",))
             elif tok.startswith("**"):
-                self.chat.insert("end", tok[2:-2], base + ("bold",))
+                t.insert("end", tok[2:-2], base + ("bold",))
             elif tok.startswith("`"):
-                self.chat.insert("end", tok[1:-1], base + ("code",))
+                t.insert("end", tok[1:-1], base + ("code",))
             else:
-                self.chat.insert("end", tok[1:-1], base + ("italic",))
+                t.insert("end", tok[1:-1], base + ("italic",))
             pos = m.end()
         if pos < len(text):
-            self.chat.insert("end", text[pos:], base)
+            t.insert("end", text[pos:], base)
 
-    def append_ai(self, provider, reply):
-        self.chat.config(state="normal")
-        self.chat.insert("end", f"{provider}: ", ("ai", "bold"))
-        in_code = False
+    def append_ai(self, provider, reply, chat=None):
+        """Show a finished answer all at once (streaming switched off)."""
+        chat = chat or self.cur_chat
+        t = chat.text
+        t.config(state="normal")
+        t.mark_set("ans_start", "end-1c")
+        t.mark_gravity("ans_start", "left")
+        t.insert("end", f"{provider}: ", ("ai", "bold"))
+        md = _Md(self, chat)
         for line in reply.split("\n"):
-            if line.strip().startswith("```"):
-                in_code = not in_code
-                continue
-            if in_code:
-                self.chat.insert("end", line + "\n", ("codeblock",))
-                continue
-            head = re.match(r"^#{1,6}\s+(.*)$", line)
-            if head:
-                self._insert_inline(head.group(1), ("ai", "heading"))
-            elif re.match(r"^\s*([-*_])(\s*\1){2,}\s*$", line):  # --- / *** separator
-                self.chat.insert("end", "\u2500" * 24, ("ai",))
-            else:
-                bullet = re.match(r"^(\s*)[-*+]\s+(.*)$", line)
-                if bullet:
-                    line = bullet.group(1) + "\u2022 " + bullet.group(2)
-                self._insert_inline(line, ("ai",))
-            self.chat.insert("end", "\n", ("ai",))
-        self.chat.insert("end", "\n", ("ai",))
-        self.chat.see("end")
-        self.chat.config(state="disabled")
+            md.line(line)
+        md.finish()
+        self._answer_links(chat, reply)
+        t.see("end")
+        t.config(state="disabled")
 
-    def send(self, _event=None):
-        text = self.entry.get().strip()
-        if text:
-            self.entry.delete(0, "end")
-            self.submit(text)
+    # ---------- streaming: the answer appears while it is written ----------
+    def _thinking(self, chat):
+        t = chat.text
+        t.config(state="normal")
+        t.insert("end", f"{self.cfg['provider']} is thinking...\n", ("sys", "thinking"))
+        t.see("end")
+        t.config(state="disabled")
 
-    def submit(self, text, image=None):
-        if image:
-            self.append("user", "You: [screenshot sent]\n")
-            for old in self.history:  # keep only the newest screenshot (saves tokens/memory)
-                if old.pop("image", None):
-                    old["content"] += " [earlier screenshot omitted]"
-        else:
-            self.append("user", f"You: {text}\n")
-        msg = {"role": "user", "content": text}
-        if image:
-            msg["image"] = image
-        self.history.append(msg)
-        threading.Thread(target=self.get_reply, args=(msg,), daemon=True).start()
+    def _clear_thinking(self, chat):
+        t = chat.text
+        rng = t.tag_ranges("thinking")
+        if not rng:
+            return
+        t.config(state="normal")
+        for i in range(len(rng) - 2, -2, -2):
+            t.delete(rng[i], rng[i + 1])
+        t.config(state="disabled")
 
-    def _drop(self, msg):
+    def _cursor_off(self, t):
+        rng = t.tag_ranges("scursor")
+        for i in range(len(rng) - 2, -2, -2):
+            t.delete(rng[i], rng[i + 1])
+
+    def _cursor_on(self, t):
+        ch = STREAM_CURSORS.get(self.cfg.get("stream_cursor", "Block"), "")
+        if ch:
+            t.insert("end", ch, ("scursor",))
+
+    def _stream_begin(self, chat, provider, demo=False):
+        self._clear_thinking(chat)
+        t = chat.text
+        t.config(state="normal")
+        if not demo:  # (the preview must not move the point that Regenerate deletes from)
+            t.mark_set("ans_start", "end-1c")
+            t.mark_gravity("ans_start", "left")
+        t.insert("end", f"{provider}: ", ("ai", "bold"))
+        self._cursor_on(t)
+        t.config(state="disabled")
+        chat.stream = {"provider": provider, "buf": "", "fed": "", "tail": "", "done": False, "reply": None,
+                       "md": _Md(self, chat), "job": None, "t": time.time(), "budget": 0.0, "fade": [],
+                       "n": 0, "demo": demo, "rush": False, "stopped": False, "error": None}
+
+    def _stream_feed(self, chat, piece, provider):
+        if chat.stream is None:
+            self._stream_begin(chat, provider)
+        st = chat.stream
+        st["fed"] += piece
+        st["buf"] += piece
+        self._pump_soon(chat)
+
+    def _stream_end(self, chat, provider, reply):
+        if chat.stream is None:
+            self._stream_begin(chat, provider)
+        st = chat.stream
+        st["done"], st["reply"] = True, reply
+        self._pump_soon(chat)
+
+    def _stream_error(self, chat, provider, err):
+        """The connection broke in the middle of an answer: keep what arrived."""
+        if chat.stream is None:
+            self._reply_failed(chat, f"Error ({provider}): {err}\n\n")
+            return
+        st = chat.stream
+        st["done"], st["rush"], st["error"] = True, True, str(err)
+        self._pump_soon(chat)
+
+    def _pump_soon(self, chat):
+        st = chat.stream
+        if st is not None and st["job"] is None:
+            st["job"] = self.root.after(1, lambda: self._stream_pump(chat))
+
+    def _stream_pump(self, chat):
+        """Hand the received text to the screen the way the 'Stream' settings say (speed, style ...)."""
+        st = chat.stream
+        if st is None or chat not in self.chats:
+            return
+        st["job"] = None
+        now = time.time()
+        dt = min(0.25, now - st["t"])
+        st["t"] = now
+        style = self.cfg.get("stream_style", STREAM_STYLES[0])
+        if style not in STREAM_STYLES:
+            style = STREAM_STYLES[0]
+        buf = st["buf"]
+        n = 0
+        if buf:
+            if st["rush"] or style == "As it arrives":
+                n = len(buf)
+            elif style == "Line by line":
+                n = len(buf) if st["done"] else buf.rfind("\n") + 1
+            else:  # Typewriter / Word by word: a steady speed, however the network delivers the text
+                try:
+                    cps = min(3000, max(10, int(self.cfg.get("stream_speed", 160))))
+                except (TypeError, ValueError):
+                    cps = 160
+                st["budget"] += cps * dt
+                n = max(int(st["budget"]), len(buf) // 10)  # never fall far behind the network
+                if n >= 1 and style == "Word by word" and n < len(buf):
+                    m = re.compile(r"\s").search(buf, n)
+                    n = m.end() if m else (len(buf) if st["done"] else 0)
+                n = min(n, len(buf))
+                if n:
+                    st["budget"] = max(0.0, st["budget"] - n)
         try:
-            self.history.remove(msg)
+            if n > 0:
+                st["buf"] = buf[n:]
+                self._stream_emit(chat, buf[:n])
+            self._fade_tick(chat)
+        except tk.TclError:
+            chat.stream = None
+            return
+        if st["buf"] or st["fade"] or (not st["done"] and st["buf"]):
+            st["job"] = self.root.after(25, lambda: self._stream_pump(chat))
+        elif st["done"]:
+            self._stream_finalize(chat)
+
+    def _insert_raw(self, chat, text):
+        """Plain text of the line that is still being written (it gets its final look when the line ends)."""
+        st, t = chat.stream, chat.text
+        tags = ("codeblock",) if st["md"].in_code else ("ai",)
+        if self.cfg.get("stream_fade", True):
+            st["n"] += 1
+            a, b = f"fa{st['n']}", f"fb{st['n']}"
+            t.mark_set(a, "end-1c")
+            t.mark_gravity(a, "left")
+            t.insert("end", text, tags + ("fadeA",))
+            t.mark_set(b, "end-1c")
+            t.mark_gravity(b, "left")
+            st["fade"].append({"a": a, "b": b, "t0": time.time(), "stage": 0})
+        else:
+            t.insert("end", text, tags)
+
+    def _stream_emit(self, chat, text):
+        st, t = chat.stream, chat.text
+        follow = bool(self.cfg.get("stream_autoscroll", True)) and t.yview()[1] > 0.97
+        t.config(state="normal")
+        self._cursor_off(t)
+        rest = text
+        if "\n" in text:
+            # finished lines get their final look (bold, code, bullets ...): remove the plain text of this
+            # line and draw it again, formatted
+            if st["tail"]:
+                t.delete("tail", "end-1c")
+            lines = (st["tail"] + text).split("\n")
+            st["tail"] = ""
+            for ln in lines[:-1]:
+                st["md"].line(ln)
+            rest = lines[-1]
+        if rest:
+            if not st["tail"]:  # a new line starts: remember where its plain text begins
+                t.mark_set("tail", "end-1c")
+                t.mark_gravity("tail", "left")
+            self._insert_raw(chat, rest)
+            st["tail"] += rest
+        self._cursor_on(t)
+        if follow:
+            t.see("end")
+        t.config(state="disabled")
+
+    def _fade_tick(self, chat):
+        st, t = chat.stream, chat.text
+        if not st["fade"]:
+            return
+        now, keep = time.time(), []
+        for f in st["fade"]:
+            age = now - f["t0"]
+            try:
+                if age > 0.22:
+                    t.tag_remove("fadeA", f["a"], f["b"])
+                    t.tag_remove("fadeB", f["a"], f["b"])
+                    t.mark_unset(f["a"], f["b"])
+                    continue
+                if age > 0.09 and not f["stage"]:
+                    t.tag_remove("fadeA", f["a"], f["b"])
+                    t.tag_add("fadeB", f["a"], f["b"])
+                    f["stage"] = 1
+                keep.append(f)
+            except tk.TclError:
+                pass
+        st["fade"] = keep
+
+    def _stream_finalize(self, chat):
+        """Everything has been shown: give the last line its final look, add the Copy / Regenerate links."""
+        st = chat.stream
+        if st is None:
+            return
+        t = chat.text
+        reply = st["reply"] if st["reply"] is not None else st["fed"]
+        t.config(state="normal")
+        self._cursor_off(t)
+        if st["tail"]:
+            t.delete("tail", "end-1c")
+            st["md"].line(st["tail"])
+            st["tail"] = ""
+        st["md"].finish()
+        for f in st["fade"]:
+            try:
+                t.tag_remove("fadeA", f["a"], f["b"])
+                t.tag_remove("fadeB", f["a"], f["b"])
+                t.mark_unset(f["a"], f["b"])
+            except tk.TclError:
+                pass
+        chat.stream = None
+        if st["demo"]:
+            t.insert("end", "\n", ("ai",))
+            t.config(state="disabled")
+            t.see("end")
+            return
+        if reply.strip():
+            self._answer_links(chat, reply)
+        if st["error"]:
+            t.insert("end", f"Error ({st['provider']}): {st['error']}\n(The answer above is incomplete.)\n\n",
+                     ("sys",))
+        elif st["stopped"]:
+            t.insert("end", "[stopped]\n\n", ("sys",))
+        t.see("end")
+        t.config(state="disabled")
+        if reply.strip():
+            chat.history.append({"role": "assistant", "content": reply})
+            chat.last_answer = reply
+        else:
+            self._drop(chat, None)
+        chat.busy = False
+        if chat is not self.cur_chat:
+            chat.unread = True
+        self._sync_send_button()
+        self._rebuild_tabs()
+        if not st["error"] and not st["stopped"]:
+            self._answer_done(chat)
+
+    def stream_preview(self):
+        """The Preview button in the Stream tab: shows a sample answer with the current settings."""
+        chat = self.cur_chat
+        if chat.busy or chat.stream is not None:
+            return
+        self.show_no_focus()
+        sample = ("Here is a **streaming** preview.\n\n"
+                  "- It follows your style, speed, fade and cursor settings\n"
+                  "- `Code` and **bold** get their final look when a line is done\n\n"
+                  "```\nprint('hello')\n```\n"
+                  "That's all - nothing was sent to the AI.")
+        self._stream_begin(chat, "Preview", demo=True)
+        st = chat.stream
+        st["fed"], st["buf"], st["done"], st["reply"] = sample, sample, True, sample
+        self._pump_soon(chat)
+
+    def _stop_chat(self, chat):
+        """The Stop button: keep what has been written so far and don't wait for the rest."""
+        if not chat.busy:
+            return
+        chat.cancel.set()
+        chat.gen += 1  # whatever is still on its way is thrown away
+        st = chat.stream
+        if st is not None:
+            st["done"], st["rush"], st["stopped"] = True, True, True
+            self._pump_soon(chat)
+            return
+        self._clear_thinking(chat)
+        self._drop(chat, None)
+        self.append("sys", "Stopped.\n\n", chat)
+        chat.busy = False
+        self._sync_send_button()
+        self._rebuild_tabs()
+
+    def _drop(self, chat, msg):
+        """Take a question out of the history again (nothing came of it). msg=None: the last question."""
+        h = chat.history
+        try:
+            if msg is None:
+                if h and h[-1].get("role") == "user":
+                    h.pop()
+            else:
+                h.remove(msg)
         except ValueError:
             pass
 
-    def get_reply(self, msg):
+    def _reply_failed(self, chat, text):
+        self._clear_thinking(chat)
+        self.append("sys", text, chat)
+        chat.busy = False
+        self._sync_send_button()
+        self._rebuild_tabs()
+
+    def _answer_full(self, chat, provider, reply):
+        """A finished answer shown all at once (streaming is switched off)."""
+        self._clear_thinking(chat)
+        self.append_ai(provider, reply, chat)
+        chat.history.append({"role": "assistant", "content": reply})
+        chat.last_answer = reply
+        chat.busy = False
+        if chat is not self.cur_chat:
+            chat.unread = True
+        self._sync_send_button()
+        self._rebuild_tabs()
+        self._answer_done(chat)
+
+    def _answer_done(self, chat):
+        """An answer is complete: confetti (ADHD mode), and 'replace my selection' for quick actions."""
+        if self.cfg.get("adhd_mode") and self.cfg.get("adhd_answers", True):
+            self.confetti_everywhere()
+        if chat.replace_pending:
+            chat.replace_pending = False
+            threading.Thread(target=self._replace_selection, args=(chat.last_answer,), daemon=True).start()
+
+    def _if_current(self, chat, gen, fn, *args):
+        """Run fn only if this chat was not reset / closed since the question was asked."""
+        if chat.gen == gen and chat in self.chats:
+            fn(*args)
+
+    # ---------- sending ----------
+    def send(self, _event=None):
+        text = self.entry.get().strip()
+        if not text:
+            return
+        if self.cur_chat.busy:
+            self.append("sys", "Still busy with the last message. Wait for the answer, or press Stop.\n\n")
+            return
+        self.entry.delete(0, "end")
+        self.submit(text)
+
+    def submit(self, text, image=None, shown=None, replace=False):
+        """Send a message in the open chat. `shown` is what the chat shows for it (the AI gets `text`)."""
+        chat = self.cur_chat
+        if chat.busy:
+            self.append("sys", "Still busy with the last message. Wait for the answer, or press Stop.\n\n")
+            return
+        if image:
+            self.append("user", f"You: {shown or '[screenshot sent]'}\n")
+            for old in chat.history:  # keep only the newest screenshot (saves tokens/memory)
+                if old.pop("image", None):
+                    old["content"] += " [earlier screenshot omitted]"
+        else:
+            self.append("user", f"You: {shown or text}\n")
+        msg = {"role": "user", "content": text}
+        if image:
+            msg["image"] = image
+        chat.history.append(msg)
+        if not chat.title:
+            first = " ".join(str(shown or text).split())
+            chat.title = first[:24]
+        chat.replace_pending = bool(replace)
+        self._start_reply(chat, msg)
+
+    def _start_reply(self, chat, msg, keep_msg=False):
+        chat.busy = True
+        chat.cancel = threading.Event()
+        self._sync_send_button()
+        self._rebuild_tabs()
+        self._thinking(chat)
+        threading.Thread(target=self.get_reply, args=(chat, msg, chat.gen, keep_msg), daemon=True).start()
+
+    def get_reply(self, chat, msg, gen, keep_msg=False):
+        """Runs in a worker thread: asks the AI and hands the answer (or the pieces of it) to the Tk thread."""
+        def ui(fn, *args):
+            self.ui(self._if_current, chat, gen, fn, *args)
+
         provider = self.cfg["provider"]
         key = self.get_api_key(provider)
         model = self.cfg["providers"][provider]["model"]
 
+        def fail(text):
+            if not keep_msg:
+                self.ui(self._if_current, chat, gen, self._drop, chat, msg)
+            ui(self._reply_failed, chat, text)
+
         if not key and provider not in NO_KEY_NEEDED:
-            self._drop(msg)
-            self.ui(self.append, "sys", f"No API key for {provider}. Press {label('settings')} "
-                                        f"and enter one (or set {PROVIDERS[provider]['env']}).\n\n")
+            fail(f"No API key for {provider}. Press {label('settings')} "
+                 f"and enter one (or set {PROVIDERS[provider]['env']}).\n\n")
             return
         if provider not in NO_KEY_NEEDED and len(key) < 20:
-            self._drop(msg)
-            self.ui(self.append, "sys", f"The {provider} API key looks wrong (too short). Press "
-                                        f"{label('settings')}, clear the key field and paste the real key.\n\n")
+            fail(f"The {provider} API key looks wrong (too short). Press "
+                 f"{label('settings')}, clear the key field and paste the real key.\n\n")
             return
+        history = list(chat.history)
+        system = self.persona_text()
+        cancel = chat.cancel
+        streaming = bool(self.cfg.get("stream_enabled", True))
+        got = [False]
+
+        def on_text(piece):
+            if cancel.is_set():
+                raise _StopStream()
+            got[0] = True
+            ui(self._stream_feed, chat, piece, provider)
+
         try:
             reply = None
             for attempt in range(3):
                 try:
-                    reply = ask_ai(provider, key, model, list(self.history), self.persona_text())
+                    if streaming:
+                        reply = stream_ai(provider, key, model, history, system, on_text, cancel)
+                    else:
+                        reply = ask_ai(provider, key, model, history, system)
                     break
+                except _StopStream:
+                    return
                 except (RuntimeError, requests.exceptions.RequestException) as err:
                     network = (isinstance(err, (requests.exceptions.Timeout,
                                                 requests.exceptions.ConnectionError))
                                and provider not in NO_KEY_NEEDED)
-                    temporary = network or any(f"HTTP {c}" in str(err)
-                                               for c in (429, 500, 502, 503, 504))
-                    if not temporary or attempt == 2:
+                    temporary = network or any(f"HTTP {c}" in str(err) for c in (429, 500, 502, 503, 504))
+                    if got[0] or not temporary or attempt == 2:  # (text already shown can't be retried cleanly)
                         raise
-                    self.ui(self.append, "sys", f"{provider} is busy, retrying "
-                                                f"({attempt + 2}/3)...\n")
+                    ui(self.append, "sys", f"{provider} is busy, retrying ({attempt + 2}/3)...\n", chat)
                     time.sleep(3 * (attempt + 1))
+            if cancel.is_set():
+                return
             if not reply or not reply.strip():
                 raise RuntimeError("The AI returned an empty answer. Try rephrasing, or check the model name.")
+        except _StopStream:
+            return
         except Exception as err:  # noqa: BLE001
-            self._drop(msg)
-            self.ui(self.append, "sys", f"Error ({provider}): {err}\n\n")
+            if cancel.is_set():
+                return
+            if got[0]:
+                ui(self._stream_error, chat, provider, err)
+            else:
+                fail(f"Error ({provider}): {err}\n\n")
             return
 
-        self.history.append({"role": "assistant", "content": reply})
-        self.last_answer = reply
-        self.ui(self.append_ai, provider, reply)
+        if streaming:
+            ui(self._stream_end, chat, provider, reply)
+        else:
+            ui(self._answer_full, chat, provider, reply)
 
     # ---------- auto prompt on start ----------
     def send_auto_prompt(self):
@@ -2816,7 +4129,102 @@ class AIWindow:
             self.ui(self.append, "sys", "Nothing highlighted. Select some text first, then press "
                                         f"{label('ask')}.\n\n")
             return
+        if self.cfg.get("qa_enabled"):
+            self.ui(self._quick_action, text)
+            return
         self.ui(self.submit, text)
+
+    # ---------- quick actions on highlighted text ----------
+    def _qa_actions(self):
+        """The quick actions from the settings: [{name, prompt, replace}], at most 9."""
+        out = []
+        for a in self.cfg.get("qa_actions") or []:
+            if isinstance(a, dict) and str(a.get("name", "")).strip() and str(a.get("prompt", "")).strip():
+                out.append({"name": str(a["name"]).strip()[:24], "prompt": str(a["prompt"]).strip(),
+                            "replace": bool(a.get("replace"))})
+        return out[:9] or copy.deepcopy(DEFAULT_QA_ACTIONS)
+
+    def _quick_action(self, text):
+        actions = self._qa_actions()
+        if self.cfg.get("qa_mode") == QA_MODES[1]:
+            act = next((a for a in actions if a["name"] == self.cfg.get("qa_default")), actions[0])
+            self._run_quick_action(act, text)
+        else:
+            self._qa_picker(actions, text)
+
+    def _run_quick_action(self, act, text):
+        lang = str(self.cfg.get("qa_translate_to") or "English").strip() or "English"
+        instruction = act["prompt"].replace("{lang}", lang)
+        replace = bool(self.cfg.get("qa_replace")) and act["replace"]
+        if replace:
+            instruction += "\n\nReply with ONLY the resulting text: no quotes, no explanations, no introduction."
+        shown = f"[{act['name']}] " + (text if len(text) <= 160 else text[:157] + "...")
+        self.submit(f"{instruction}\n\n{text}", shown=shown, replace=replace)
+
+    def _qa_picker(self, actions, text):
+        """A small menu next to the mouse: pick what to do with the highlighted text (click, or press 1-9)."""
+        if self._qa_win is not None:
+            try:
+                self._qa_win.destroy()
+            except tk.TclError:
+                pass
+        pal = self._pal or {}
+        bg, fg = pal.get("input_bg", "#2a2c33"), pal.get("fg", "#e8e8ea")
+        hdr, hdr_fg = pal.get("hdr", "#5E00F5"), pal.get("hdr_fg", "#ffffff")
+        thick, color = self._outline()
+        win = tk.Toplevel(self.root)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.configure(bg=bg, highlightthickness=max(1, thick), highlightbackground=color, highlightcolor=color)
+        self._qa_win = win
+
+        def close(_e=None):
+            try:
+                win.destroy()
+            except tk.TclError:
+                pass
+            if self._qa_win is win:
+                self._qa_win = None
+
+        def pick(act):
+            close()
+            self._run_quick_action(act, text)
+
+        tk.Label(win, text="Quick action  (1-%d, Esc = close)" % len(actions), bg=hdr, fg=hdr_fg,
+                 font=("Sans", 9, "bold"), padx=S(8), pady=S(3)).pack(fill="x")
+        for i, act in enumerate(actions, start=1):
+            note = "   (replaces)" if self.cfg.get("qa_replace") and act["replace"] else ""
+            tk.Button(win, text=f"{i}  {act['name']}{note}", anchor="w", relief="flat", bd=0, highlightthickness=0,
+                      bg=bg, fg=fg, activebackground=hdr, activeforeground=hdr_fg, padx=S(10), pady=S(4),
+                      command=lambda a=act: pick(a)).pack(fill="x")
+
+        def on_key(ev):
+            if ev.char and ev.char.isdigit() and 1 <= int(ev.char) <= len(actions):
+                pick(actions[int(ev.char) - 1])
+
+        win.bind("<Key>", on_key)
+        win.bind("<Escape>", close)
+        win.update_idletasks()
+        try:
+            px, py = self.root.winfo_pointerxy()
+        except tk.TclError:
+            px, py = 200, 200
+        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+        win.geometry(f"+{max(0, min(px + 12, sw - w - 4))}+{max(0, min(py + 12, sh - h - 4))}")
+        try:
+            win.focus_force()
+        except tk.TclError:
+            pass
+        win.after(20000, close)  # (it closes by itself if you ignore it)
+
+    def _replace_selection(self, text):
+        """Quick actions: the answer goes where the highlighted text was (Ctrl+V over the selection)."""
+        if not str(text).strip():
+            return
+        time.sleep(0.15)
+        self._paste_text(text)
+        self.ui(self.append, "sys", "Replaced your highlighted text with the answer.\n\n")
 
     # ---------- screenshot keys : screenshot -> AI ----------
     def ask_screenshot(self, slot=1):
@@ -2888,7 +4296,25 @@ class AIWindow:
                                            "or use select-area mode.") + "\n\n")
             return
         prompt = (self.cfg.get("screenshot_prompt") or DEFAULTS["screenshot_prompt"]).strip()
-        self.ui(self.submit, prompt, base64.b64encode(png).decode("ascii"))
+        image = base64.b64encode(png).decode("ascii")
+        if self.cfg.get("ocr_enabled"):
+            provider = self.cfg["provider"]
+            model = self.cfg["providers"][provider]["model"]
+            mode = self.cfg.get("ocr_mode", OCR_MODES[0])
+            if mode != OCR_MODES[2] or not model_sees_images(provider, model):
+                found, problem = "", ""
+                try:
+                    found = ocr_png(png, self.cfg.get("ocr_lang", "eng"))
+                except RuntimeError as err:
+                    problem = str(err)
+                if found:
+                    text = f"{prompt}\n\n[Text read from the screenshot by OCR]\n{found}"
+                    shown = f"[screenshot read with OCR: {len(found)} characters]"
+                    self.ui(self.submit, text, image if mode == OCR_MODES[1] else None, shown)
+                    return
+                self.ui(self.append, "sys", f"OCR: {problem or 'no text found in the screenshot'}. "
+                                            "Sending the picture instead.\n\n")
+        self.ui(self.submit, prompt, image)
 
     # ---------- Shift+V : answer -> active app ----------
     def set_clipboard(self, text):
@@ -2914,7 +4340,10 @@ class AIWindow:
             self.ui(self.show_no_focus)
             self.ui(self.append, "sys", "No answer to paste yet.\n\n")
             return
+        self._paste_text(self.last_answer)
 
+    def _paste_text(self, text):
+        """Put `text` on the clipboard and press Ctrl+V in whatever app you were using."""
         state, ready = {}, threading.Event()
 
         def prep():
@@ -2929,7 +4358,7 @@ class AIWindow:
         if state.get("focused"):
             time.sleep(0.35)
 
-        self.set_clipboard(self.last_answer)
+        self.set_clipboard(text)
         time.sleep(0.1)
         self.engine.send_paste()
         time.sleep(0.2)
@@ -2974,6 +4403,36 @@ class AIWindow:
         if state.get("focused"):
             self.ui(self.show_no_focus)
 
+    # ---------- fun: ADHD mode (confetti) ----------
+    def confetti_everywhere(self):
+        if self.confetti is None:
+            self.confetti = Confetti(self.root)
+        self.confetti.everywhere()
+
+    def _adhd_click(self):
+        """A mouse button was pressed somewhere on the screen (runs on the Tk thread)."""
+        if not (self.cfg.get("adhd_mode") and self.cfg.get("adhd_clicks", True)):
+            return
+        try:
+            x, y = self.root.winfo_pointerxy()
+        except tk.TclError:
+            return
+        if self.confetti is None:
+            self.confetti = Confetti(self.root)
+        self.confetti.burst(x, y)
+
+    def apply_adhd(self):
+        """Start / stop watching the mouse clicks, depending on the ADHD setting."""
+        on = bool(self.cfg.get("adhd_mode")) and bool(self.cfg.get("adhd_clicks", True))
+        if on:
+            if self.mouse_watcher is None:
+                self.mouse_watcher = MouseWatcher(lambda: self.ui(self._adhd_click))
+            self.mouse_watcher.start()
+        elif self.mouse_watcher is not None:
+            self.mouse_watcher.stop()
+        if not self.cfg.get("adhd_mode") and self.confetti is not None:
+            self.confetti.clear()
+
     # ---------- fun: spinning horse ----------
     def apply_fun(self):
         """Start the fun things that are switched on in the menu (called at start-up)."""
@@ -2981,6 +4440,7 @@ class AIWindow:
             self.start_horse()
         if self.cfg.get("fun_pirate"):
             self.start_pirate()
+        self.apply_adhd()
         self.schedule_jumpscare()
 
     def _fun_bg(self):
@@ -3243,7 +4703,7 @@ class AIWindow:
     def _update_checked(self, info):
         self.update_checked_at = time.time()
         self.update_state = info["state"]
-        self.update_info = info if info["state"] == "available" else None
+        self.update_info = info if info["state"] in ("available", "refresh") else None
         if info["state"] != "error":
             self.update_versions = info.get("versions", [])
         self.update_text = info.get("message", "")
@@ -3251,12 +4711,23 @@ class AIWindow:
             self._update_announced = info["version"]
             self.append("sys", f"Update available: {info['version']}. Press {label('settings')} and "
                                f"click the Update button.\n\n")
+        elif info["state"] == "refresh":
+            # the same version number, but the published file changed: a new build of this version
+            key = info["version"] + info["sha256"]
+            if self._update_announced != key:
+                self._update_announced = key
+                self.append("sys", f"A new build of {info['version']} is available (same version, updated "
+                                   f"program). Press {label('settings')} and click Refresh.\n\n")
+            if self.cfg.get("auto_refresh") and self.cfg.get("last_refresh_sha") != info["sha256"]:
+                self.cfg["last_refresh_sha"] = info["sha256"]  # (so a refresh that does not stick can't loop)
+                save_config(self.cfg)
+                self.install_update_async()
         self._refresh_update_row()
 
     def install_update_async(self, info=None):
         """Download and install a version: the newest one (no argument) or the one picked in the picker."""
         info = info or self.update_info
-        if not info or self.update_state not in ("available", "uptodate", "error"):
+        if not info or self.update_state not in ("available", "uptodate", "error", "refresh"):
             return
         self.update_state, self.update_text = "installing", f"Downloading {info['version']}..."
         self._refresh_update_row()
@@ -3269,7 +4740,7 @@ class AIWindow:
             except OSError as err:
                 self.ui(self._update_failed, f"Could not save the update ({err.__class__.__name__}).")
             else:
-                self.ui(self._update_installed, info["version"])
+                self.ui(self._update_installed, info["version"], info.get("notes", ""))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -3279,13 +4750,19 @@ class AIWindow:
             self.install_update_async(info)
 
     def _update_failed(self, message):
-        self.update_state = "available" if self.update_info else "uptodate"
+        self.update_state = (self.update_info or {}).get("state", "uptodate")
         self.update_text = message
         self._refresh_update_row()
 
-    def _update_installed(self, version):
-        verb = "Updated" if version_tuple(version) > version_tuple(VERSION) else "Switched"
+    def _update_installed(self, version, notes=""):
+        if version == VERSION:
+            verb = "Refreshed"
+        else:
+            verb = "Updated" if version_tuple(version) > version_tuple(VERSION) else "Switched"
         self.update_state, self.update_text = "installed", f"{verb} to {version}. Restarting..."
+        self.cfg["show_whats_new"] = True  # after the restart: show what changed
+        self.cfg["update_notes"] = str(notes or "")[:300]
+        save_config(self.cfg)
         self._refresh_update_row()
         self.root.after(900, self._restart)
 
@@ -3332,10 +4809,16 @@ class AIWindow:
                           pady=S(3), state="normal" if enabled else "disabled",
                           command=command).grid(row=row_i, column=1, sticky="e", padx=(S(8), 0), pady=S(2))
 
-            if state == "available":
+            if state in ("available", "refresh"):
                 info = self.update_info or {}
-                tk.Button(frame, text=f"\u2B06  Update available: {info.get('version', '')}  -  click to update",
-                          bg="#1f9d55", fg="#ffffff", activebackground="#27b866", activeforeground="#ffffff",
+                if state == "available":
+                    big = f"\u2B06  Update available: {info.get('version', '')}  -  click to update"
+                    col, col_hi = "#1f9d55", "#27b866"
+                else:
+                    big = f"\u27F3  New build of {info.get('version', '')}  -  click to refresh"
+                    col, col_hi = "#2b7de9", "#4a92f0"
+                tk.Button(frame, text=big,
+                          bg=col, fg="#ffffff", activebackground=col_hi, activeforeground="#ffffff",
                           relief="flat", bd=0, highlightthickness=0, pady=S(6), command=self.install_update_async
                           ).grid(row=r, column=0, columnspan=2, sticky="ew", pady=S(2))
                 r += 1
@@ -3357,7 +4840,7 @@ class AIWindow:
                 r += 1
 
             # the version picker: install ANY version the update address lists (newer or older)
-            if self.update_versions and state in ("available", "uptodate", "error"):
+            if self.update_versions and state in ("available", "uptodate", "error", "refresh"):
                 names = [v["version"] for v in self.update_versions]
                 if self.update_pick not in names:
                     self.update_pick = VERSION if VERSION in names else names[0]
@@ -3392,8 +4875,87 @@ class AIWindow:
                     tk.Label(frame, text=chosen["notes"], bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w",
                              justify="left", wraplength=S(520)).grid(row=r, column=0, columnspan=2, sticky="w",
                                                                      pady=(S(3), 0))
+                    r += 1
+            auto = tk.BooleanVar(value=bool(self.cfg.get("auto_refresh")))
+            frame._auto_var = auto  # (keep it alive)
+
+            def auto_toggled(*_):
+                self.cfg["auto_refresh"] = bool(auto.get())
+                save_config(self.cfg)
+
+            auto.trace_add("write", auto_toggled)
+            tk.Checkbutton(frame, text="Refresh by itself when my version gets a new build", variable=auto,
+                           bg=MENU_BG, fg=MENU_HINT, selectcolor=MENU_TAB, activebackground=MENU_BG,
+                           activeforeground=MENU_FG, font=("Sans", 8), highlightthickness=0, bd=0,
+                           anchor="w").grid(row=r, column=0, columnspan=2, sticky="w", pady=(S(4), 0))
         except tk.TclError:
             self._update_row = None
+
+    # ---------- what's new (after an update) ----------
+    def _maybe_whats_new(self):
+        seen = str(self.cfg.get("last_seen_version", ""))
+        flagged = bool(self.cfg.get("show_whats_new"))
+        if seen == VERSION and not flagged:
+            return
+        brand_new = not self._cfg_existed and not seen and not flagged
+        notes = str(self.cfg.get("update_notes", "")).strip()
+        self.cfg["last_seen_version"] = VERSION
+        self.cfg["show_whats_new"] = False
+        self.cfg["update_notes"] = ""
+        save_config(self.cfg)
+        if brand_new or not (WHATS_NEW.get(VERSION) or notes):
+            return
+        self.show_whats_new(notes)
+
+    def show_whats_new(self, notes=""):
+        """A window listing what is new in this version."""
+        old = self._whats_new_win
+        if old is not None:
+            try:
+                if old.winfo_exists():
+                    old.lift()
+                    return
+            except tk.TclError:
+                pass
+        win = self._popup(540, 500)
+        self._whats_new_win = win
+        self._menu_styles(win)
+        self._drag_bar(win, "What's new in " + VERSION.replace("AI_W_", ""))
+
+        def close(_e=None):
+            self._whats_new_win = None
+            try:
+                win.destroy()
+            except tk.TclError:
+                pass
+
+        btns = tk.Frame(win, bg=MENU_BG)
+        btns.pack(side="bottom", pady=S(10))
+        win._smoke.see_through(btns)
+        tk.Button(btns, text="Got it", width=14, bg=MENU_BUTTON, fg=MENU_FG, activebackground=MENU_BUTTON_ACTIVE,
+                  activeforeground=MENU_FG, relief="flat", bd=0, highlightthickness=0, pady=S(3),
+                  command=close).pack()
+        edge = tk.Frame(win, bg=MENU_BG, highlightthickness=1, highlightbackground=MENU_EDGE,
+                        highlightcolor=MENU_EDGE)
+        edge.pack(fill="both", expand=True)
+        bar = ttk.Scrollbar(edge, orient="vertical")
+        body = tk.Text(edge, wrap="word", bd=0, highlightthickness=0, bg=MENU_BG, fg=MENU_FG, cursor="arrow",
+                       font=("Sans", 10), padx=S(14), pady=S(12), yscrollcommand=bar.set, spacing3=S(2))
+        bar.configure(command=body.yview)
+        bar.pack(side="right", fill="y")
+        body.pack(side="left", fill="both", expand=True)
+        body.tag_configure("h", font=("Sans", 13, "bold"), spacing3=S(8))
+        body.tag_configure("n", foreground=MENU_HINT, spacing3=S(8))
+        body.tag_configure("b", lmargin1=S(4), lmargin2=S(20), spacing3=S(7))
+        body.insert("end", f"AI Window {VERSION.replace('AI_W_', '')}\n", "h")
+        if notes:
+            body.insert("end", notes + "\n", "n")
+        for item in WHATS_NEW.get(VERSION, []):
+            body.insert("end", "\u2022  " + item + "\n", "b")
+        body.config(state="disabled")
+        win.bind("<Escape>", close)
+        win.protocol("WM_DELETE_WINDOW", close)
+        self._show_popup(win)
 
     # ---------- save slots ----------
     def toggle_settings(self):
@@ -3852,7 +5414,7 @@ class AIWindow:
         if self.settings_win is not None and self.settings_win.winfo_exists():
             self.settings_win.lift()
             return
-        win = self._popup(720, 660)
+        win = self._popup(780, 660)
         self.settings_win = win
         self._menu_styles(win)
         _slots_t = self.cfg.get("slots") or []
@@ -3905,9 +5467,10 @@ class AIWindow:
         for seq in ("<Button-4>", "<Button-5>", "<MouseWheel>"):
             win.bind(seq, on_wheel)
 
-        t_ai, t_look, t_win, t_keys, t_type, t_shot, t_anim, t_fun = (
+        t_ai, t_look, t_win, t_keys, t_type, t_shot, t_stream, t_qa, t_anim, t_fun = (
             new_tab("AI"), new_tab("Look"), new_tab("Window"), new_tab("Keybinds"), new_tab("Typing"),
-            new_tab("Screenshot"), new_tab("Animations"), new_tab("Fun"))  # (Fun is always the last tab)
+            new_tab("Screenshot"), new_tab("Stream"), new_tab("Actions"), new_tab("Animations"),
+            new_tab("Fun"))  # (Fun is always the last tab)
 
         # ================= AI tab =================
         prov_state = copy.deepcopy(self.cfg["providers"])
@@ -4471,8 +6034,8 @@ class AIWindow:
         scare_min_var = tk.IntVar(value=int(self.cfg.get("jumpscare_min", DEFAULTS["jumpscare_min"])))
         scare_max_var = tk.IntVar(value=int(self.cfg.get("jumpscare_max", DEFAULTS["jumpscare_max"])))
 
-        def fun_scale(parent, lo, hi, var):
-            return tk.Scale(parent, from_=lo, to=hi, orient="horizontal", variable=var, length=S(170),
+        def fun_scale(parent, lo, hi, var, length=170):
+            return tk.Scale(parent, from_=lo, to=hi, orient="horizontal", variable=var, length=S(length),
                             sliderlength=S(30), width=S(15), bg=MENU_BG, fg=MENU_FG, troughcolor=MENU_TAB,
                             highlightthickness=0, bd=0)
 
@@ -4482,7 +6045,8 @@ class AIWindow:
         ttk.Checkbutton(t_fun, text="Bounce around the screen", variable=bounce_var,
                         style="S.TCheckbutton").grid(row=1, column=0, columnspan=3, sticky="w", padx=(20, 0))
         ttk.Label(t_fun, text="Horse size", style="S.TLabel").grid(row=2, column=0, sticky="w", padx=(20, 0), pady=4)
-        fun_scale(t_fun, 80, 300, horse_size_var).grid(row=2, column=1, columnspan=2, sticky="w", pady=2)
+        fun_scale(t_fun, 80, 300, horse_size_var, length=330).grid(row=2, column=1, columnspan=2, sticky="w",
+                                                                  pady=2)
         tk.Label(t_fun, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(400),
                  text="Click the horse to make it spin the other way. Untick the box to make it go away."
                  ).grid(row=3, column=0, columnspan=3, sticky="w", padx=(20, 0))
@@ -4597,6 +6161,234 @@ class AIWindow:
         scare_var.trace_add("write", scare_changed)
         scare_min_var.trace_add("write", scare_changed)
         scare_max_var.trace_add("write", scare_changed)
+
+        # ================= Stream tab =================
+        stream_on_var = tk.BooleanVar(value=bool(self.cfg.get("stream_enabled", True)))
+        _sty = self.cfg.get("stream_style", STREAM_STYLES[0])
+        stream_style_var = tk.StringVar(value=_sty if _sty in STREAM_STYLES else STREAM_STYLES[0])
+        stream_speed_var = tk.IntVar(value=int(self.cfg.get("stream_speed", DEFAULTS["stream_speed"])))
+        stream_fade_var = tk.BooleanVar(value=bool(self.cfg.get("stream_fade", True)))
+        _cur = self.cfg.get("stream_cursor", "Block")
+        stream_cursor_var = tk.StringVar(value=_cur if _cur in STREAM_CURSORS else "Block")
+        stream_scroll_var = tk.BooleanVar(value=bool(self.cfg.get("stream_autoscroll", True)))
+
+        ttk.Checkbutton(t_stream, text="Stream answers: show the words while the AI writes them",
+                        variable=stream_on_var, style="S.TCheckbutton").grid(row=0, column=0, columnspan=2,
+                                                                              sticky="w", pady=(0, 8))
+        ttk.Label(t_stream, text="How the text pops up", style="S.TLabel").grid(row=1, column=0, sticky="w", pady=4)
+        choice(t_stream, stream_style_var, STREAM_STYLES, 16).grid(row=1, column=1, sticky="w", pady=4)
+        ttk.Label(t_stream, text="Speed (characters per second)", style="S.TLabel").grid(row=2, column=0,
+                                                                                          sticky="w", pady=4)
+        tk.Scale(t_stream, from_=20, to=1000, resolution=10, orient="horizontal", variable=stream_speed_var,
+                 length=S(230), sliderlength=S(30), width=S(15), bg=MENU_BG, fg=MENU_FG, troughcolor=MENU_TAB,
+                 highlightthickness=0, bd=0).grid(row=2, column=1, sticky="w", pady=2)
+        ttk.Checkbutton(t_stream, text="New text fades in", variable=stream_fade_var,
+                        style="S.TCheckbutton").grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 2))
+        ttk.Label(t_stream, text="Cursor while it writes", style="S.TLabel").grid(row=4, column=0, sticky="w", pady=4)
+        choice(t_stream, stream_cursor_var, list(STREAM_CURSORS), 12).grid(row=4, column=1, sticky="w", pady=4)
+        ttk.Checkbutton(t_stream, text="Follow the new text (only while you are at the bottom of the chat)",
+                        variable=stream_scroll_var, style="S.TCheckbutton").grid(row=5, column=0, columnspan=2,
+                                                                                  sticky="w", pady=(6, 2))
+        ttk.Button(t_stream, text="Preview", width=10, command=self.stream_preview).grid(
+            row=6, column=0, sticky="w", pady=(10, 2))
+        tk.Label(t_stream, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(430),
+                 text="Typewriter: the text is typed at a steady speed, whatever the network does. Word by word: "
+                      "whole words appear. Line by line: a line shows up when it is finished. As it arrives: "
+                      "exactly as the AI sends it. Bold, code and bullets get their final look when a line is "
+                      "done. Streaming off = each answer appears all at once. The login (command-line) "
+                      "providers can't stream, but their answer is still typed out. Preview shows a sample "
+                      "in the AI window with these settings."
+                 ).grid(row=7, column=0, columnspan=2, sticky="w", pady=(4, 0))
+
+        def stream_changed(*_):
+            self.cfg["stream_enabled"] = bool(stream_on_var.get())
+            self.cfg["stream_style"] = stream_style_var.get() if stream_style_var.get() in STREAM_STYLES \
+                else STREAM_STYLES[0]
+            self.cfg["stream_fade"] = bool(stream_fade_var.get())
+            self.cfg["stream_cursor"] = stream_cursor_var.get() if stream_cursor_var.get() in STREAM_CURSORS \
+                else "Block"
+            self.cfg["stream_autoscroll"] = bool(stream_scroll_var.get())
+            try:
+                self.cfg["stream_speed"] = int(stream_speed_var.get())
+            except (tk.TclError, ValueError):
+                pass
+        for v in (stream_on_var, stream_style_var, stream_speed_var, stream_fade_var, stream_cursor_var,
+                  stream_scroll_var):
+            v.trace_add("write", stream_changed)
+
+        # ================= Actions tab (quick actions on highlighted text) =================
+        qa_on_var = tk.BooleanVar(value=bool(self.cfg.get("qa_enabled", False)))
+        _qm = self.cfg.get("qa_mode", QA_MODES[0])
+        qa_mode_var = tk.StringVar(value=_qm if _qm in QA_MODES else QA_MODES[0])
+        qa_default_var = tk.StringVar(value=str(self.cfg.get("qa_default", "Explain")))
+        qa_replace_var = tk.BooleanVar(value=bool(self.cfg.get("qa_replace", False)))
+        qa_lang_var = tk.StringVar(value=str(self.cfg.get("qa_translate_to", "English")))
+        qa_rows = []   # one dict per action row: name / prompt / replace variables and its frame
+        qa_live = []   # becomes non-empty once the menu is open (rows added after that get the frosted look too)
+
+        ttk.Checkbutton(t_qa, text=f"Quick actions: {label('ask')} on highlighted text offers a menu of actions",
+                        variable=qa_on_var, style="S.TCheckbutton").grid(row=0, column=0, columnspan=3,
+                                                                          sticky="w", pady=(0, 2))
+        tk.Label(t_qa, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(460),
+                 text="Off by default: then the key just sends the highlighted text to the AI, as before. "
+                      "On: pick an action (click it, or press its number)."
+                 ).grid(row=1, column=0, columnspan=3, sticky="w")
+        ttk.Label(t_qa, text="When I press the key", style="S.TLabel").grid(row=2, column=0, sticky="w", pady=4)
+        choice(t_qa, qa_mode_var, QA_MODES, 28).grid(row=2, column=1, columnspan=2, sticky="w", pady=4)
+        ttk.Label(t_qa, text="Default action", style="S.TLabel").grid(row=3, column=0, sticky="w", pady=4)
+        qa_default_spin = choice(t_qa, qa_default_var, [a["name"] for a in self._qa_actions()], 20)
+        qa_default_spin.grid(row=3, column=1, columnspan=2, sticky="w", pady=4)
+        ttk.Checkbutton(t_qa, text="Replace my highlighted text with the answer (for actions marked 'replace')",
+                        variable=qa_replace_var, style="S.TCheckbutton").grid(row=4, column=0, columnspan=3,
+                                                                               sticky="w", pady=(8, 2))
+        tk.Label(t_qa, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(460),
+                 text="The answer is pasted over your selection with Ctrl+V (the same way as the paste key), so "
+                      "the text has to be still highlighted in the other app. Off = the answer only shows in "
+                      "the AI window."
+                 ).grid(row=5, column=0, columnspan=3, sticky="w")
+        ttk.Label(t_qa, text="Translate to", style="S.TLabel").grid(row=6, column=0, sticky="w", pady=4)
+        ttk.Entry(t_qa, textvariable=qa_lang_var, width=18).grid(row=6, column=1, sticky="w", pady=4)
+        ttk.Separator(t_qa, orient="horizontal").grid(row=7, column=0, columnspan=3, sticky="ew", pady=10)
+        ttk.Label(t_qa, text="Your actions: name  -  what to tell the AI  -  replace?", style="S.TLabel").grid(
+            row=8, column=0, columnspan=3, sticky="w")
+        qa_frame = ttk.Frame(t_qa, style="S.TFrame")
+        qa_frame.grid(row=9, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        qa_msg = tk.Label(t_qa, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left",
+                          wraplength=S(460), text="{lang} in a text is replaced by the 'Translate to' language.")
+        qa_msg.grid(row=11, column=0, columnspan=3, sticky="w", pady=(4, 0))
+
+        def qa_save(*_):
+            acts = []
+            for r in qa_rows:
+                name, prompt = r["name"].get().strip(), r["prompt"].get().strip()
+                if name and prompt:
+                    acts.append({"name": name[:24], "prompt": prompt, "replace": bool(r["replace"].get())})
+            self.cfg["qa_actions"] = acts
+            names = [a["name"] for a in acts] or [a["name"] for a in DEFAULT_QA_ACTIONS]
+            try:
+                qa_default_spin.configure(values=names)
+            except tk.TclError:
+                pass
+            if qa_default_var.get() not in names:
+                qa_default_var.set(names[0])
+            self.cfg["qa_enabled"] = bool(qa_on_var.get())
+            self.cfg["qa_mode"] = qa_mode_var.get() if qa_mode_var.get() in QA_MODES else QA_MODES[0]
+            self.cfg["qa_default"] = qa_default_var.get()
+            self.cfg["qa_replace"] = bool(qa_replace_var.get())
+            self.cfg["qa_translate_to"] = qa_lang_var.get().strip() or "English"
+
+        def qa_add(action=None, save=True):
+            if len(qa_rows) >= 9:
+                qa_msg.config(text="That is the most: 9 actions.")
+                return
+            action = action or {"name": "", "prompt": "", "replace": False}
+            row = {"name": tk.StringVar(value=action["name"]), "prompt": tk.StringVar(value=action["prompt"]),
+                   "replace": tk.BooleanVar(value=bool(action.get("replace")))}
+            f = ttk.Frame(qa_frame, style="S.TFrame")
+            f.pack(anchor="w", pady=2)
+            ttk.Entry(f, textvariable=row["name"], width=12).pack(side="left")
+            ttk.Entry(f, textvariable=row["prompt"], width=34).pack(side="left", padx=4)
+            ttk.Checkbutton(f, text="replace", variable=row["replace"], style="S.TCheckbutton").pack(side="left")
+
+            def remove(r=row):
+                r["frame"].destroy()
+                qa_rows.remove(r)
+                qa_save()
+
+            ttk.Button(f, text="x", width=2, command=remove).pack(side="left", padx=(4, 0))
+            row["frame"] = f
+            qa_rows.append(row)
+            if qa_live:
+                win._smoke.glass_panel(f)
+            for v in (row["name"], row["prompt"], row["replace"]):
+                v.trace_add("write", qa_save)
+            if save:
+                qa_save()
+
+        def qa_load(actions):
+            for r in list(qa_rows):
+                r["frame"].destroy()
+            qa_rows.clear()
+            for a in actions:
+                qa_add(dict(a), save=False)
+            qa_save()
+
+        qa_buttons = ttk.Frame(t_qa, style="S.TFrame")
+        qa_buttons.grid(row=10, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Button(qa_buttons, text="+ Add action", command=qa_add).pack(side="left")
+        ttk.Button(qa_buttons, text="Restore the presets",
+                   command=lambda: qa_load(copy.deepcopy(DEFAULT_QA_ACTIONS))).pack(side="left", padx=6)
+        for a in self._qa_actions():
+            qa_add(dict(a), save=False)
+        for v in (qa_on_var, qa_mode_var, qa_default_var, qa_replace_var, qa_lang_var):
+            v.trace_add("write", qa_save)
+
+        # ================= Screenshot tab: local OCR =================
+        ocr_on_var = tk.BooleanVar(value=bool(self.cfg.get("ocr_enabled", False)))
+        _om = self.cfg.get("ocr_mode", OCR_MODES[0])
+        ocr_mode_var = tk.StringVar(value=_om if _om in OCR_MODES else OCR_MODES[0])
+        ocr_lang_var = tk.StringVar(value=str(self.cfg.get("ocr_lang", "eng")))
+        ttk.Separator(t_shot, orient="horizontal").grid(row=9, column=0, columnspan=2, sticky="ew", pady=14)
+        ttk.Checkbutton(t_shot, text="Local OCR: read the text in the screenshot with tesseract",
+                        variable=ocr_on_var, style="S.TCheckbutton").grid(row=10, column=0, columnspan=2,
+                                                                           sticky="w", pady=(0, 2))
+        ocr_status = tk.Label(t_shot, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left",
+                              wraplength=S(400))
+        ocr_status.grid(row=11, column=0, columnspan=2, sticky="w")
+
+        def ocr_check(*_):
+            ocr_status.config(text="tesseract was found: OCR is ready." if tesseract_available() else
+                              "tesseract is NOT installed. Install it with:  sudo apt install tesseract-ocr   "
+                              "(other languages: sudo apt install tesseract-ocr-spa, -cat, ...)")
+        ocr_check()
+        ttk.Label(t_shot, text="Use OCR", style="S.TLabel").grid(row=12, column=0, sticky="w", pady=4)
+        choice(t_shot, ocr_mode_var, OCR_MODES, 36).grid(row=12, column=1, sticky="w", pady=4)
+        ttk.Label(t_shot, text="Language(s)", style="S.TLabel").grid(row=13, column=0, sticky="w", pady=4)
+        ocr_lang_row = ttk.Frame(t_shot, style="S.TFrame")
+        ocr_lang_row.grid(row=13, column=1, sticky="w", pady=4)
+        ttk.Entry(ocr_lang_row, textvariable=ocr_lang_var, width=12).pack(side="left")
+        ttk.Button(ocr_lang_row, text="Check again", command=ocr_check).pack(side="left", padx=8)
+        tk.Label(t_shot, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(400),
+                 text="Off by default. The text is read on this computer and sent to the AI together with your "
+                      "screenshot prompt, so screenshots also work with models that can't see pictures "
+                      "(the login / command-line options, most Ollama models). 'Text only' = no picture is "
+                      "sent at all. Language: tesseract codes such as eng, spa, cat or eng+spa."
+                 ).grid(row=14, column=0, columnspan=2, sticky="w")
+
+        def ocr_changed(*_):
+            self.cfg["ocr_enabled"] = bool(ocr_on_var.get())
+            self.cfg["ocr_mode"] = ocr_mode_var.get() if ocr_mode_var.get() in OCR_MODES else OCR_MODES[0]
+            self.cfg["ocr_lang"] = ocr_lang_var.get().strip() or "eng"
+        for v in (ocr_on_var, ocr_mode_var, ocr_lang_var):
+            v.trace_add("write", ocr_changed)
+
+        # ================= Fun tab: ADHD mode =================
+        adhd_var = tk.BooleanVar(value=bool(self.cfg.get("adhd_mode", False)))
+        adhd_clicks_var = tk.BooleanVar(value=bool(self.cfg.get("adhd_clicks", True)))
+        adhd_answers_var = tk.BooleanVar(value=bool(self.cfg.get("adhd_answers", True)))
+        ttk.Separator(t_fun, orient="horizontal").grid(row=14, column=0, columnspan=3, sticky="ew", pady=14)
+        ttk.Checkbutton(t_fun, text="ADHD mode: confetti!", variable=adhd_var,
+                        style="S.TCheckbutton").grid(row=15, column=0, columnspan=3, sticky="w", pady=(0, 4))
+        ttk.Checkbutton(t_fun, text="Confetti pops where I click the mouse", variable=adhd_clicks_var,
+                        style="S.TCheckbutton").grid(row=16, column=0, columnspan=3, sticky="w", padx=(20, 0))
+        ttk.Checkbutton(t_fun, text="Confetti all over the screen when an answer is done",
+                        variable=adhd_answers_var, style="S.TCheckbutton").grid(row=17, column=0, columnspan=3,
+                                                                                 sticky="w", padx=(20, 0))
+        ttk.Button(t_fun, text="Test confetti", command=self.confetti_everywhere).grid(
+            row=18, column=0, columnspan=3, sticky="w", padx=(20, 0), pady=(6, 2))
+        tk.Label(t_fun, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(400),
+                 text="Mouse clicks anywhere on the screen are noticed through the mouse device (the same "
+                      "/dev/input access the hotkeys use). Knowing where the pointer is needs X11 or XWayland; "
+                      "on a pure Wayland desktop the confetti may not appear at the pointer."
+                 ).grid(row=19, column=0, columnspan=3, sticky="w", padx=(20, 0))
+
+        def adhd_changed(*_):
+            self.cfg["adhd_mode"] = bool(adhd_var.get())
+            self.cfg["adhd_clicks"] = bool(adhd_clicks_var.get())
+            self.cfg["adhd_answers"] = bool(adhd_answers_var.get())
+            self.apply_adhd()
+        for v in (adhd_var, adhd_clicks_var, adhd_answers_var):
+            v.trace_add("write", adhd_changed)
 
         # ================= buttons =================
         def read_keybinds():
@@ -4754,6 +6546,26 @@ class AIWindow:
             pirate_size_var.set(DEFAULTS["pirate_size"])
             pirate_side_var.set(DEFAULTS["pirate_side"])
             pirate_lift_var.set(DEFAULTS["pirate_lift"])
+            adhd_var.set(DEFAULTS["adhd_mode"])
+            adhd_clicks_var.set(DEFAULTS["adhd_clicks"])
+            adhd_answers_var.set(DEFAULTS["adhd_answers"])
+
+            # ---- Stream, Actions and the OCR part of the Screenshot tab ----
+            stream_on_var.set(DEFAULTS["stream_enabled"])
+            stream_style_var.set(DEFAULTS["stream_style"])
+            stream_speed_var.set(DEFAULTS["stream_speed"])
+            stream_fade_var.set(DEFAULTS["stream_fade"])
+            stream_cursor_var.set(DEFAULTS["stream_cursor"])
+            stream_scroll_var.set(DEFAULTS["stream_autoscroll"])
+            qa_on_var.set(DEFAULTS["qa_enabled"])
+            qa_mode_var.set(DEFAULTS["qa_mode"])
+            qa_replace_var.set(DEFAULTS["qa_replace"])
+            qa_lang_var.set(DEFAULTS["qa_translate_to"])
+            qa_load(copy.deepcopy(DEFAULT_QA_ACTIONS))
+            qa_default_var.set(DEFAULTS["qa_default"])
+            ocr_on_var.set(DEFAULTS["ocr_enabled"])
+            ocr_mode_var.set(DEFAULTS["ocr_mode"])
+            ocr_lang_var.set(DEFAULTS["ocr_lang"])
 
             # ---- Window tab: interface size ----
             scale_var.set("Auto")
@@ -4783,9 +6595,25 @@ class AIWindow:
         win.bind("<Escape>", lambda _e: save_and_close())
         tk.Label(win, text="Made by Invis", bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8)).place(
             relx=1.0, rely=1.0, x=-10, y=-6, anchor="se")
-        for tab in (t_ai, t_look, t_win, t_keys, t_type, t_shot, t_fun, t_anim):
-            win._smoke.glass_panel(tab.master)  # frosted glass (tab.master = the tab's outlined panel)
-        win._smoke.glass_panel(win)  # (and the top bar, the hint at the bottom ...)
+        all_tabs = (t_ai, t_look, t_win, t_keys, t_type, t_shot, t_stream, t_qa, t_anim, t_fun)
+        tab_by_id = {str(t.tab_id): t for t in all_tabs}
+        glassed = set()
+
+        def glass_tab(tab):
+            if tab not in glassed:
+                glassed.add(tab)
+                win._smoke.glass_panel(tab.master)  # frosted glass (tab.master = the tab's outlined panel)
+
+        def on_tab_changed(_e=None):
+            win._smoke.pause(300)  # let the new tab appear first, then do the extra work
+            tab = tab_by_id.get(nb.select())
+            if tab is not None:
+                win.after(60, lambda: glass_tab(tab))
+
+        nb.bind("<<NotebookTabChanged>>", on_tab_changed)
+        glass_tab(t_ai)
+        qa_live.append(1)
+        win._smoke.glass_panel(win, skip=(nb,))  # (the top bar, the hint at the bottom ...; the tabs come lazily)
         self._show_popup(win)
 
     # ---------- main loop ----------
