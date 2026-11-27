@@ -1,26 +1,6 @@
 {
-  "version": "AI_W_2.7.1",
+  "version": "AI_W_2.7.2",
   "url": "https://raw.githubusercontent.com/TheInvisGuy/All-in-one-AI-window/main/ai_window.py",
-  "sha256": "a6b0691014385c49c9ff3dcf499caaeb30f2fd8b01669d3dee4e9fb110ade651",
-  "notes": "Version 2.7.1",
-  "versions": [
-    {
-      "version": "AI_W_2.7.1",
-      "url": "https://raw.githubusercontent.com/TheInvisGuy/All-in-one-AI-window/main/ai_window.py",
-      "sha256": "a6b0691014385c49c9ff3dcf499caaeb30f2fd8b01669d3dee4e9fb110ade651",
-      "notes": "Version 2.7.1"
-    },
-    {
-      "version": "AI_W_2.7",
-      "url": "https://raw.githubusercontent.com/TheInvisGuy/All-in-one-AI-window/main/versions/ai_window_AI_W_2.7.py",
-      "sha256": "06a80c10726c721210f107ffc556cf076b403f039e4c0cb26159a251b73447f7",
-      "notes": ""
-    },
-    {
-      "version": "AI_W_2.6",
-      "url": "https://raw.githubusercontent.com/TheInvisGuy/All-in-one-AI-window/main/versions/ai_window_AI_W_2.6.py",
-      "sha256": "6b1fb163074d8ad7b6fc174ac2438b6eba49fa55f1063a5ae37c8b2ff90fe5e6",
-      "notes": ""
-    }
-  ]
+  "sha256": "53f49e9d6d5bb1d8db2841169120a7f39ba908689daaf70df87d51b0c698a6a5",
+  "notes": "Windows support, streaming answers, quick actions, local OCR, new-chat tab"
 }

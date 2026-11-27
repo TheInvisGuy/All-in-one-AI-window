@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Floating AI window for Linux (works on X11 AND Wayland, in every app)
----------------------------------------------------------------------
+Floating AI window for Linux (X11 AND Wayland) and Windows, in every app
+------------------------------------------------------------------------
 Shift+Z -> open / close the AI window (toggle; bottom-left corner by default)
 Shift+M -> open the settings menu (AI provider, key, window name/color, position, size, typing)
 Shift+C -> take the text you have HIGHLIGHTED in any app/browser and send it to the AI
@@ -37,6 +37,7 @@ Run with:   python3 ai_window.py        (no sudo)
 
 import base64
 import copy
+import ctypes
 import hashlib
 import json
 import math
@@ -48,21 +49,67 @@ import shutil
 import signal
 import subprocess
 import sys
+import struct
 import tempfile
 import threading
 import time
 import traceback
+import zlib
 import tkinter as tk
 from tkinter import colorchooser, filedialog, ttk
 
 import requests
 
-try:
-    import evdev
-    from evdev import UInput, ecodes as e
-except ImportError:
-    sys.exit("Missing dependency. Run:\n"
-             "  sudo apt install python3-evdev python3-requests python3-tk wl-clipboard xclip")
+IS_WINDOWS = sys.platform.startswith("win")
+UI_FONT = "Segoe UI" if IS_WINDOWS else "Sans"
+MONO_FONT = "Consolas" if IS_WINDOWS else "Monospace"
+PIL_INSTALL = "pip install pillow" if IS_WINDOWS else "sudo apt install python3-pil"
+NO_WINDOW = {"creationflags": 0x08000000} if IS_WINDOWS else {}  # programs we start must not flash a console
+_DETACH = {"creationflags": 0x00000208} if IS_WINDOWS else {"start_new_session": True}  # restart: a separate process
+
+
+class _WinKeys:
+    """Stand-in for evdev's key names on Windows: KEY_A is the Windows virtual-key code of A, and so on."""
+    KEY_LEFTSHIFT, KEY_RIGHTSHIFT = 0xA0, 0xA1
+    KEY_LEFTCTRL, KEY_RIGHTCTRL = 0xA2, 0xA3
+    KEY_LEFTALT, KEY_RIGHTALT = 0xA4, 0xA5
+    KEY_LEFTMETA, KEY_RIGHTMETA = 0x5B, 0x5C
+    KEY_ESC, KEY_ENTER, KEY_SPACE, KEY_TAB = 0x1B, 0x0D, 0x20, 0x09
+    EV_SYN, EV_KEY, EV_REL, EV_ABS = 0, 1, 2, 3
+    BTN_LEFT, BTN_RIGHT = 0x110, 0x111
+
+    def __getattr__(self, name):
+        if name.startswith("KEY_"):
+            key = name[4:]
+            if len(key) == 1 and key.isalnum():
+                return ord(key.upper())              # letters and digits: same code as the character
+            m = re.fullmatch(r"F([1-9]|1[0-2])", key)
+            if m:
+                return 0x6F + int(m.group(1))        # F1 = 0x70 ... F12 = 0x7B
+            return 0x1000 + zlib.crc32(name.encode()) % 0x1000  # punctuation: only the Linux typing tables use it
+        raise AttributeError(name)
+
+
+if IS_WINDOWS:
+    evdev = UInput = None
+    e = _WinKeys()
+    for _stream in ("stdout", "stderr"):  # a program without a console window has no stdout / stderr
+        if getattr(sys, _stream) is None:
+            setattr(sys, _stream, open(os.devnull, "w"))
+    try:  # sharp text and real pixel sizes on high-DPI screens (has to happen before the first window)
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except (AttributeError, OSError):
+            ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:  # noqa: BLE001
+        pass
+else:
+    try:
+        import evdev
+        from evdev import UInput, ecodes as e
+    except ImportError:
+        sys.exit("Missing dependency. Run:\\n"
+                 "  sudo apt install python3-evdev python3-requests python3-tk wl-clipboard xclip")
 
 # When packaged with PyInstaller the script runs from a temporary folder that is deleted on exit,
 # so the settings file must live next to the executable instead.
@@ -303,7 +350,7 @@ DEFAULTS = {
     "ui_scale": "auto",           # interface size: auto, or 100% ... 300% (for high-resolution screens)
 }
 
-VERSION = "AI_W_2.7.1"
+VERSION = "AI_W_2.7.2"
 
 # Shown in the "What's new" window after an update (and listed in the update notes of your version.json).
 WHATS_NEW = {
@@ -359,6 +406,7 @@ def _valid_release(entry):
 
 
 MIN_VERSION = (2, 6)   # older versions are not offered any more
+MIN_VERSION_WINDOWS = (2, 7, 2)   # on Windows only versions that run on Windows are offered (2.7.2 and newer)
 
 
 def local_build_sha():
@@ -391,7 +439,7 @@ def fetch_update_info(manifest_url):
     for item in extra:
         if item and item["version"] not in releases:
             releases[item["version"]] = item
-    versions = sorted((r for r in releases.values() if version_tuple(r["version"]) >= MIN_VERSION),
+    versions = sorted((r for r in releases.values() if version_tuple(r["version"]) >= (MIN_VERSION_WINDOWS if IS_WINDOWS else MIN_VERSION)),
                       key=lambda r: version_tuple(r["version"]), reverse=True)
     if version_tuple(latest["version"]) <= version_tuple(VERSION):
         # the same version number, but the published file is a different one = a new build of this version
@@ -1225,7 +1273,7 @@ def load_slot_photo(path, size=128):
         os.unlink(tmp.name)
         return data, ""
     except (tk.TclError, OSError):
-        return "", "Could not read that picture. Use a PNG or GIF (or install Pillow: sudo apt install python3-pil)."
+        return "", f"Could not read that picture. Use a PNG or GIF (or install Pillow: {PIL_INSTALL})."
 
 
 def _raise_for_status(resp):
@@ -1356,7 +1404,7 @@ def call_cli(provider, model, history, system=""):
     cmd.append(prompt)
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=180,
-                           cwd=CLI_WORKDIR, stdin=subprocess.DEVNULL)
+                           cwd=CLI_WORKDIR, stdin=subprocess.DEVNULL, **NO_WINDOW)
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"{tool['exe']} took too long (over 3 minutes).")
     if r.returncode != 0:
@@ -1573,8 +1621,20 @@ VISION_HINTS = ("llava", "vision", "bakllava", "moondream", "minicpm-v", "gemma3
                 "llama4", "mistral-small3")
 
 
+def _tesseract_exe():
+    exe = shutil.which("tesseract")
+    if exe or not IS_WINDOWS:
+        return exe
+    for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)"),
+                 os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs")):
+        candidate = os.path.join(base, "Tesseract-OCR", "tesseract.exe") if base else ""
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    return None
+
+
 def tesseract_available():
-    return shutil.which("tesseract") is not None
+    return _tesseract_exe() is not None
 
 
 def model_sees_images(provider, model):
@@ -1588,14 +1648,17 @@ def model_sees_images(provider, model):
 
 def ocr_png(png, lang="eng"):
     """The text tesseract finds in a PNG (bytes). Raises RuntimeError with a message that can be shown."""
-    exe = shutil.which("tesseract")
+    exe = _tesseract_exe()
     if not exe:
-        raise RuntimeError("tesseract is not installed. Install it with:  sudo apt install tesseract-ocr")
+        raise RuntimeError("tesseract is not installed. Install it with:  "
+                           + ("winget install UB-Mannheim.TesseractOCR" if IS_WINDOWS
+                              else "sudo apt install tesseract-ocr"))
     lang = str(lang or "").strip()
     if not re.fullmatch(r"[A-Za-z0-9_+]{2,40}", lang):
         lang = "eng"
     try:
-        r = subprocess.run([exe, "stdin", "stdout", "-l", lang], input=png, capture_output=True, timeout=60)
+        r = subprocess.run([exe, "stdin", "stdout", "-l", lang], input=png, capture_output=True, timeout=60,
+                           **NO_WINDOW)
     except subprocess.TimeoutExpired:
         raise RuntimeError("tesseract took too long.") from None
     if r.returncode != 0:
@@ -1624,6 +1687,8 @@ def _capture(cmd, timeout=1.5):
 
 def read_selection():
     """Return the text currently highlighted anywhere (the PRIMARY selection)."""
+    if IS_WINDOWS:
+        return win_read_selection()
     x11 = [["xclip", "-selection", "primary", "-o"], ["xsel", "-p", "-o"]]
     wl = [["wl-paste", "--primary", "--no-newline"]]
     order = x11 + wl if (IS_GNOME or not ON_WAYLAND) else wl + x11
@@ -1635,6 +1700,9 @@ def read_selection():
 
 
 def _push(cmd, text):
+    if IS_WINDOWS:  # (the Linux clipboard programs don't exist here: use the real Windows clipboard)
+        win_set_clipboard(text)
+        return
     if not shutil.which(cmd[0]):
         return
     try:
@@ -1809,6 +1877,8 @@ def capture_screen(mode="area", preferred="auto"):
     """Take a screenshot. mode: 'area' (drag a rectangle) or 'full' (whole screen, no windows).
     preferred: 'auto' tries the installed tools in order and skips any that fail; a tool name uses
     ONLY that tool (so it can't open a second screenshot app). Returns PNG bytes, or None if cancelled."""
+    if IS_WINDOWS:
+        return win_capture(mode)
     if preferred != "auto":
         if preferred not in SCREENSHOT_TOOLS or not _tool_available(preferred, ignore_broken=True, mode=mode):
             raise RuntimeError(f"The screenshot tool '{preferred}' is not installed (or can't do this). "
@@ -1940,6 +2010,8 @@ INJECT_KEYS = sorted(
 
 def detect_layout():
     """Return 'us', 'es' or 'other' for the keyboard layout currently active."""
+    if IS_WINDOWS:
+        return "other"  # (typing on Windows sends the characters themselves, the layout does not matter)
     def normalize(name):
         base, _, variant = name.strip().partition("+")
         if base == "us" and not variant:
@@ -1968,6 +2040,12 @@ def detect_layout():
 # ---------------------------------------------------------------------------
 # Global hotkey engine (evdev grab + uinput forwarding)
 # ---------------------------------------------------------------------------
+WIN_SETUP_HELP = (
+    "Windows did not let the program watch the keyboard, so the hotkeys cannot work.\n"
+    "Try starting the program again. If it keeps happening, security software may be blocking it:\n"
+    "allow AIWindow in your antivirus. (Windows only allows keyboard hooks for normal programs;\n"
+    "to use the hotkeys while an 'Administrator' program is in front, run AIWindow as administrator too.)")
+
 SETUP_HELP = """
 Cannot access the keyboard / uinput devices. One-time setup:
 
@@ -2163,6 +2241,345 @@ class HotkeyEngine:
 
 
 # ---------------------------------------------------------------------------
+# Windows support: keyboard hook, typing, clipboard and screenshots. Everything goes through ctypes
+# (the Windows API that is already on every PC), so there is nothing extra to install.
+# ---------------------------------------------------------------------------
+WIN_AREA_PICKER = [None]  # set by the window: lets the user drag a rectangle (runs on the Tk thread)
+_KEYUP, _UNICODE = 0x0002, 0x0004
+
+
+class _KBDLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [("vkCode", ctypes.c_uint32), ("scanCode", ctypes.c_uint32), ("flags", ctypes.c_uint32),
+                ("time", ctypes.c_uint32), ("dwExtraInfo", ctypes.c_size_t)]
+
+
+class _KEYBDINPUT(ctypes.Structure):
+    _fields_ = [("wVk", ctypes.c_uint16), ("wScan", ctypes.c_uint16), ("dwFlags", ctypes.c_uint32),
+                ("time", ctypes.c_uint32), ("dwExtraInfo", ctypes.c_size_t)]
+
+
+class _MOUSEINPUT(ctypes.Structure):  # (not used, but it must be in the union so the size is right)
+    _fields_ = [("dx", ctypes.c_int32), ("dy", ctypes.c_int32), ("mouseData", ctypes.c_uint32),
+                ("dwFlags", ctypes.c_uint32), ("time", ctypes.c_uint32), ("dwExtraInfo", ctypes.c_size_t)]
+
+
+class _HARDWAREINPUT(ctypes.Structure):
+    _fields_ = [("uMsg", ctypes.c_uint32), ("wParamL", ctypes.c_uint16), ("wParamH", ctypes.c_uint16)]
+
+
+class _INPUT_UNION(ctypes.Union):
+    _fields_ = [("mi", _MOUSEINPUT), ("ki", _KEYBDINPUT), ("hi", _HARDWAREINPUT)]
+
+
+class _INPUT(ctypes.Structure):
+    _anonymous_ = ("u",)
+    _fields_ = [("type", ctypes.c_uint32), ("u", _INPUT_UNION)]
+
+
+class _MSG(ctypes.Structure):
+    _fields_ = [("hwnd", ctypes.c_void_p), ("message", ctypes.c_uint32), ("wParam", ctypes.c_size_t),
+                ("lParam", ctypes.c_ssize_t), ("time", ctypes.c_uint32), ("pt_x", ctypes.c_int32),
+                ("pt_y", ctypes.c_int32)]
+
+
+_WIN_API = []
+
+
+def _win_api():
+    """(user32, kernel32, hook function type), with every argument type set. (Without this, 64-bit
+    handles get cut to 32 bits and calls fail in strange ways.)"""
+    if not _WIN_API:
+        c = ctypes
+        u = c.WinDLL("user32", use_last_error=True)
+        k = c.WinDLL("kernel32", use_last_error=True)
+        vp, i32, u32, szt, ssz = c.c_void_p, c.c_int, c.c_uint32, c.c_size_t, c.c_ssize_t
+        hookproc = c.WINFUNCTYPE(ssz, i32, szt, ssz)
+        for fn, args, res in (
+                (u.SetWindowsHookExW, (i32, hookproc, vp, u32), vp),
+                (u.CallNextHookEx, (vp, i32, szt, ssz), ssz),
+                (u.UnhookWindowsHookEx, (vp,), i32),
+                (u.GetMessageW, (c.POINTER(_MSG), vp, u32, u32), i32),
+                (u.TranslateMessage, (c.POINTER(_MSG),), i32),
+                (u.DispatchMessageW, (c.POINTER(_MSG),), ssz),
+                (u.PostThreadMessageW, (u32, u32, szt, ssz), i32),
+                (u.SendInput, (u32, c.POINTER(_INPUT), i32), u32),
+                (u.GetAsyncKeyState, (i32,), c.c_int16),
+                (u.OpenClipboard, (vp,), i32),
+                (u.CloseClipboard, (), i32),
+                (u.EmptyClipboard, (), i32),
+                (u.GetClipboardData, (u32,), vp),
+                (u.SetClipboardData, (u32, vp), vp),
+                (u.GetClipboardSequenceNumber, (), u32),
+                (u.GetSystemMetrics, (i32,), i32),
+                (k.GetCurrentThreadId, (), u32),
+                (k.GetModuleHandleW, (c.c_wchar_p,), vp),
+                (k.GlobalAlloc, (u32, szt), vp),
+                (k.GlobalLock, (vp,), vp),
+                (k.GlobalSize, (vp,), szt),
+                (k.GlobalUnlock, (vp,), i32)):
+            fn.argtypes, fn.restype = args, res
+        _WIN_API.extend((u, k, hookproc))
+    return _WIN_API
+
+
+def _win_open_clipboard():
+    u = _win_api()[0]
+    for _ in range(25):  # another program may have it open for a moment
+        if u.OpenClipboard(None):
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def win_get_clipboard():
+    """The text on the Windows clipboard ('' if there is none)."""
+    u, k, _ = _win_api()
+    if not _win_open_clipboard():
+        return ""
+    try:
+        handle = u.GetClipboardData(13)  # CF_UNICODETEXT
+        if not handle:
+            return ""
+        ptr = k.GlobalLock(handle)
+        if not ptr:
+            return ""
+        try:
+            raw = ctypes.string_at(ptr, k.GlobalSize(handle))  # UTF-16, ended by a zero character
+            return raw.decode("utf-16-le", "replace").split("\0", 1)[0]
+        finally:
+            k.GlobalUnlock(handle)
+    finally:
+        u.CloseClipboard()
+
+
+def win_set_clipboard(text):
+    """Put text on the Windows clipboard. Returns True if it worked."""
+    u, k, _ = _win_api()
+    data = (text.replace("\r\n", "\n").replace("\n", "\r\n") + "\0").encode("utf-16-le")
+    handle = k.GlobalAlloc(0x0002, len(data))  # GMEM_MOVEABLE
+    if not handle:
+        return False
+    ptr = k.GlobalLock(handle)
+    if not ptr:
+        return False
+    ctypes.memmove(ptr, data, len(data))
+    k.GlobalUnlock(handle)
+    if not _win_open_clipboard():
+        return False
+    try:
+        u.EmptyClipboard()
+        return bool(u.SetClipboardData(13, handle))  # (Windows owns the memory from here on)
+    finally:
+        u.CloseClipboard()
+
+
+def _win_send(events):
+    """Send key events [(virtual key, scan code / UTF-16 unit, flags), ...] in one go."""
+    u = _win_api()[0]
+    arr = (_INPUT * len(events))()
+    for n, (vk, scan, flags) in enumerate(events):
+        arr[n].type = 1  # INPUT_KEYBOARD
+        arr[n].ki.wVk = vk
+        arr[n].ki.wScan = scan
+        arr[n].ki.dwFlags = flags
+    return u.SendInput(len(events), arr, ctypes.sizeof(_INPUT))
+
+
+def win_tap_keys(vks):
+    """Press the keys in order, then let go in reverse order (a chord such as Ctrl+C)."""
+    _win_send([(v, 0, 0) for v in vks] + [(v, 0, _KEYUP) for v in reversed(vks)])
+
+
+def win_type_char(ch):
+    """Type one character as itself (Unicode), whatever the keyboard layout is."""
+    data = ch.encode("utf-16-le")
+    events = []
+    for unit in struct.unpack(f"<{len(data) // 2}H", data):  # characters above U+FFFF are two units
+        events += [(0, unit, _UNICODE), (0, unit, _UNICODE | _KEYUP)]
+    _win_send(events)
+
+
+def win_modifiers_down():
+    """Is Shift, Ctrl, Alt or the Windows key held down right now?"""
+    u = _win_api()[0]
+    return any(u.GetAsyncKeyState(vk) & 0x8000 for vk in (0x10, 0x11, 0x12, 0x5B, 0x5C))
+
+
+def win_read_selection():
+    """Windows has no 'highlighted text' selection, so press Ctrl+C in the other program and read what
+    arrives on the clipboard (the old clipboard text is put back afterwards)."""
+    u = _win_api()[0]
+    before = u.GetClipboardSequenceNumber()
+    old = win_get_clipboard()
+    t0 = time.time()
+    while win_modifiers_down() and time.time() - t0 < 2.0:  # let go of Shift first, or it becomes Ctrl+Shift+C
+        time.sleep(0.02)
+    win_tap_keys([0x11, 0x43])  # Ctrl + C
+    text = ""
+    for _ in range(25):
+        time.sleep(0.04)
+        if u.GetClipboardSequenceNumber() != before:  # something was copied
+            time.sleep(0.05)
+            text = win_get_clipboard()
+            break
+    if text and old and old != text:
+        win_set_clipboard(old)
+    return text.replace("\r\n", "\n").strip()
+
+
+def win_virtual_screen():
+    """(left, top, width, height) of all screens together."""
+    u = _win_api()[0]
+    return u.GetSystemMetrics(76), u.GetSystemMetrics(77), u.GetSystemMetrics(78), u.GetSystemMetrics(79)
+
+
+def win_capture(mode):
+    """A screenshot as PNG bytes (None = cancelled). 'area' lets the user drag a rectangle."""
+    try:
+        import io
+        from PIL import ImageGrab
+    except ImportError:
+        raise RuntimeError("Screenshots on Windows need Pillow:  pip install pillow") from None
+    try:
+        img = ImageGrab.grab(all_screens=True)
+    except Exception as err:  # noqa: BLE001
+        raise RuntimeError(f"Could not capture the screen ({err.__class__.__name__}).") from None
+    if mode == "area":
+        picker = WIN_AREA_PICKER[0]
+        if picker is None:
+            raise RuntimeError("The area picker is not ready yet.")
+        left, top = win_virtual_screen()[:2]
+        box = picker(img, left, top)
+        if not box:
+            LAST_CAPTURE_INFO[0] = "no area was selected"
+            return None
+        img = img.crop(box)
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, "PNG")
+    return buf.getvalue()
+
+
+class WinHotkeyEngine(HotkeyEngine):
+    """The Windows version of the hotkey engine. A low-level keyboard hook sees every key before any program
+    does and swallows only the configured hotkeys. Typing and pasting are sent with SendInput."""
+
+    def __init__(self, actions, on_quit):
+        super().__init__(actions, on_quit)
+        self._thread = None
+        self._thread_id = None
+        self._hook = None
+        self._proc = None  # (kept so Python does not free the hook function)
+        self._ready = threading.Event()
+        self._error = ""
+
+    # -- the decision for one real key event --------------------------------------------------
+    def _forget_released_modifiers(self):
+        """If a modifier key-up was missed (lock screen, another keyboard hook, ...), don't stay stuck."""
+        u = _win_api()[0]
+        mods = set().union(*MOD_GROUPS.values())
+        with self.lock:
+            for code in list(self.pressed & mods):
+                if not (u.GetAsyncKeyState(code) & 0x8000):
+                    self.pressed.discard(code)
+
+    def process_event(self, vk, flags, down):
+        """True = swallow this key event (no program gets it)."""
+        if flags & 0x10:  # LLKHF_INJECTED: made by a program (e.g. by us while typing), never a hotkey
+            return False
+        if down and vk in self.pressed:  # auto-repeat of a key that is being held
+            return vk in self.swallowed
+        if down and not any(vk in codes for codes in MOD_GROUPS.values()):
+            self._forget_released_modifiers()
+        return self.handle_key(vk, 1 if down else 0)
+
+    # -- the hook ---------------------------------------------------------------------------------
+    def _hook_thread(self):
+        try:
+            u, k, hookproc = _win_api()
+            self._thread_id = k.GetCurrentThreadId()
+
+            def proc(n_code, w_param, l_param):
+                if n_code >= 0 and w_param in (0x100, 0x101, 0x104, 0x105):  # key down / up (and Alt versions)
+                    try:
+                        kb = ctypes.cast(l_param, ctypes.POINTER(_KBDLLHOOKSTRUCT)).contents
+                        if self.process_event(kb.vkCode, kb.flags, w_param in (0x100, 0x104)):
+                            return 1
+                    except Exception:  # noqa: BLE001  (never let an error here block the keyboard)
+                        traceback.print_exc()
+                return u.CallNextHookEx(None, n_code, w_param, l_param)
+
+            self._proc = hookproc(proc)
+            self._hook = u.SetWindowsHookExW(13, self._proc, k.GetModuleHandleW(None), 0)  # WH_KEYBOARD_LL
+            if not self._hook:
+                self._error = f"Windows refused the keyboard hook (error {ctypes.get_last_error()})."
+                self._ready.set()
+                return
+            self._ready.set()
+            msg = _MSG()
+            while u.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:  # a hook only works while this loop runs
+                u.TranslateMessage(ctypes.byref(msg))
+                u.DispatchMessageW(ctypes.byref(msg))
+            u.UnhookWindowsHookEx(self._hook)
+        except Exception as err:  # noqa: BLE001
+            self._error = str(err) or err.__class__.__name__
+            self._ready.set()
+
+    def start(self):
+        self._thread = threading.Thread(target=self._hook_thread, daemon=True)
+        self._thread.start()
+        if not self._ready.wait(3) or self._error:
+            raise RuntimeError("Cannot watch the keyboard: " + (self._error or "it took too long"))
+
+    def shutdown(self):
+        if self._thread_id:
+            try:
+                _win_api()[0].PostThreadMessageW(self._thread_id, 0x0012, 0, 0)  # WM_QUIT ends the hook loop
+            except Exception:  # noqa: BLE001
+                pass
+
+    # -- typing / pasting --------------------------------------------------------------------------
+    def wait_modifiers_released(self, timeout=2.0):
+        t0 = time.time()
+        while win_modifiers_down() and time.time() - t0 < timeout:
+            time.sleep(0.02)
+
+    def send_paste(self):
+        """Type Ctrl+V into whatever program has the focus."""
+        self.wait_modifiers_released()
+        time.sleep(0.05)
+        win_tap_keys([0x11, 0x56])
+
+    def type_text(self, text, layout, newline_mode, fallback, delay=TYPE_DELAY):
+        """Type text one character at a time. Returns True if a character needed `fallback` (never on Windows:
+        every character is sent as itself)."""
+        self.typing_cancel.clear()
+        self.wait_modifiers_released()
+        time.sleep(0.15)
+        for ch in text:
+            if self.typing_cancel.is_set():
+                break
+            if ch == "\r":
+                continue
+            if ch == "\n":
+                if newline_mode == "Space":
+                    win_type_char(" ")
+                elif newline_mode == "Enter":
+                    win_tap_keys([0x0D])
+                else:
+                    win_tap_keys([0x10, 0x0D])  # Shift+Enter: a new line without sending a chat message
+            elif ch == "\t":
+                win_tap_keys([0x09])
+            else:
+                win_type_char(ch)
+            time.sleep(delay)
+        return False
+
+
+if IS_WINDOWS:
+    HotkeyEngine = WinHotkeyEngine  # the window below uses this name
+
+
+# ---------------------------------------------------------------------------
 # The window
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
@@ -2331,7 +2748,22 @@ class MouseWatcher:
                 d.close()
         return devs
 
+    def _run_windows(self, flag):
+        u = _win_api()[0]
+        was_down = False
+        while not flag.is_set():
+            down = bool(u.GetAsyncKeyState(0x01) & 0x8000) or bool(u.GetAsyncKeyState(0x02) & 0x8000)
+            if down and not was_down:  # a button went down (left or right)
+                now = time.time()
+                if now - self.last > 0.08:
+                    self.last = now
+                    self.on_click()
+            was_down = down
+            time.sleep(0.02)
+
     def _run(self, flag):
+        if IS_WINDOWS:
+            return self._run_windows(flag)
         import selectors
         devs = self._find()
         if not devs:
@@ -2483,9 +2915,9 @@ class AIWindow:
 
         self.header = tk.Frame(self.root, bg=ACCENT)
         self.header.pack(fill="x")
-        self.title_label = tk.Label(self.header, bg=ACCENT, fg="white", font=("Sans", 10, "bold"))
+        self.title_label = tk.Label(self.header, bg=ACCENT, fg="white", font=(UI_FONT, 10, "bold"))
         self.title_label.pack(side="left", padx=8, pady=4)
-        self.provider_label = tk.Label(self.header, bg=ACCENT, fg="#e0d8ff", font=("Sans", 8))
+        self.provider_label = tk.Label(self.header, bg=ACCENT, fg="#e0d8ff", font=(UI_FONT, 8))
         self.provider_label.pack(side="right", padx=8)
 
         # the row of chat tabs (and the + / Reset / Save buttons)
@@ -2497,7 +2929,7 @@ class AIWindow:
         # the input row is packed BEFORE the chat area, so it always keeps its space
         self.bottom = tk.Frame(self.root)
         self.bottom.pack(side="bottom", fill="x", padx=8, pady=8)
-        self.entry = tk.Entry(self.bottom, relief="flat", font=("Sans", 10))
+        self.entry = tk.Entry(self.bottom, relief="flat", font=(UI_FONT, 10))
         self.entry.pack(side="left", fill="x", expand=True, ipady=6)
         self.entry.bind("<Return>", self.send)
         self.send_btn = tk.Button(self.bottom, text="Send", relief="flat",
@@ -2527,12 +2959,20 @@ class AIWindow:
         self.root.after(40, self._poll)
 
         # ---------- global hotkeys ----------
+        WIN_AREA_PICKER[0] = self._win_pick_area  # (only used on Windows)
         self.engine = HotkeyEngine(self._build_actions(), on_quit=lambda: self.ui(self.quit_app))
         self.engine.always_on = {key_code("toggle")}
         try:
             self.engine.start()
         except RuntimeError as err:
-            print(f"\nERROR: {err}\n{SETUP_HELP}")
+            help_text = WIN_SETUP_HELP if IS_WINDOWS else SETUP_HELP
+            print(f"\nERROR: {err}\n{help_text}")
+            if IS_WINDOWS:  # there is no console window to read it in
+                try:
+                    from tkinter import messagebox
+                    messagebox.showerror("AI Window", f"{err}\n\n{help_text}")
+                except Exception:  # noqa: BLE001
+                    pass
             self.root.destroy()
             sys.exit(1)
         if self.cfg.get("open_on_start", True):
@@ -2650,8 +3090,8 @@ class AIWindow:
                      "hdr_fg": hdr_fg, "btn": btn}
         for c in self.chats:
             self._style_chat(c.text)
-        self.entry.configure(font=("Sans", size))
-        self.send_btn.configure(font=("Sans", size))
+        self.entry.configure(font=(UI_FONT, size))
+        self.send_btn.configure(font=(UI_FONT, size))
         self.entry.configure(bg=input_bg, fg=fg, insertbackground=fg, highlightthickness=1,
                              highlightbackground=border, highlightcolor=btn)
         self.tabbar.configure(bg=bg)
@@ -2702,7 +3142,9 @@ class AIWindow:
                 scale = float(setting[:-1]) / 100 if setting.endswith("%") else float(setting)
             except ValueError:
                 scale = None
-        if scale is None:  # automatic: follow the DPI, and grow on big screens that report a normal DPI
+        if scale is None and IS_WINDOWS:  # Windows reports the real DPI (the program is DPI-aware): follow it
+            scale = round(max(1.0, dpi_factor) * 4) / 4
+        elif scale is None:  # automatic: follow the DPI, and grow on big screens that report a normal DPI
             res = min(sw / 1920, sh / 1080)
             scale = round(max(dpi_factor, res if res >= 1.2 else 1.0) * 4) / 4
         scale = min(3.0, max(0.75, scale))
@@ -2720,7 +3162,7 @@ class AIWindow:
             lines = ["AI Window info (send this file if something looks wrong)", f"version: {VERSION}",
                      f"screen: {sw}x{sh}", f"tk: {self.root.tk.call('info', 'patchlevel')}",
                      f"tk dpi factor: {dpi_factor:.2f}", f"interface scale used: {scale}",
-                     f"session: {os.environ.get('XDG_SESSION_TYPE', '?')}",
+                     f"platform: {sys.platform}", f"session: {os.environ.get('XDG_SESSION_TYPE', '?')}",
                      f"desktop: {os.environ.get('XDG_CURRENT_DESKTOP', '?')}",
                      f"packaged: {bool(getattr(sys, 'frozen', False))}", f"python: {sys.version.split()[0]}"]
             with open(os.path.join(_APP_DIR, "ai_window_info.txt"), "w", encoding="utf-8") as f:
@@ -3043,7 +3485,7 @@ class AIWindow:
         bar = tk.Frame(win, bg=MENU_BG, highlightthickness=1, highlightbackground=MENU_EDGE,
                        highlightcolor=MENU_EDGE)  # same material as the plates below it
         bar.pack(side="top", fill="x")
-        lbl = tk.Label(bar, text=text, bg=MENU_BG, fg=MENU_FG, font=("Sans", 10, "bold"))
+        lbl = tk.Label(bar, text=text, bg=MENU_BG, fg=MENU_FG, font=(UI_FONT, 10, "bold"))
         lbl.pack(side="left", padx=10, pady=S(4))
         state = {}
 
@@ -3120,7 +3562,7 @@ class AIWindow:
 
     def _set_motif_decorations(self, decorated, win=None):
         """Ask the window manager to show/hide the title bar (works on X11 and XWayland)."""
-        if not shutil.which("xprop"):
+        if IS_WINDOWS or not shutil.which("xprop"):
             return False
         try:
             (win if win is not None else self.root).update()  # make sure Tk has created the wrapper window
@@ -3135,6 +3577,8 @@ class AIWindow:
     def _is_decorated(self, win=None):
         """True if the window manager's frame is taller than our window (= a title bar is drawn),
         False if not, None if it can't be measured."""
+        if IS_WINDOWS:
+            return None
         try:
             w = win if win is not None else self.root
             frame = w.wm_frame()
@@ -3328,7 +3772,7 @@ class AIWindow:
     def _new_chat_object(self):
         self.chat_counter += 1
         chat = Chat(f"Chat {self.chat_counter}")
-        chat.text = tk.Text(self.root, wrap="word", bd=0, padx=10, pady=8, font=("Sans", 10),
+        chat.text = tk.Text(self.root, wrap="word", bd=0, padx=10, pady=8, font=(UI_FONT, 10),
                             height=4, width=20, state="disabled", highlightthickness=0)
         chat.text.bind("<ButtonRelease-1>",
                        lambda ev, t=chat.text: None if t.tag_ranges("sel") else self.entry.focus_set())
@@ -3341,19 +3785,19 @@ class AIWindow:
         """Colors, fonts and text styles of one chat box (called for every chat when the theme changes)."""
         p = self._pal
         bg, fg, ibg, dark, size = p["bg"], p["fg"], p["input_bg"], p["dark"], p["size"]
-        t.configure(bg=bg, fg=fg, font=("Sans", size))
+        t.configure(bg=bg, fg=fg, font=(UI_FONT, size))
         t.tag_config("user", foreground="#9fb4ff" if dark else "#2a49c9")
         t.tag_config("ai", foreground=fg)
         t.tag_config("sys", foreground="#8a8a8a")
-        t.tag_config("thinking", foreground="#8a8a8a", font=("Sans", size, "italic"))
-        t.tag_config("bold", font=("Sans", size, "bold"))
-        t.tag_config("italic", font=("Sans", size, "italic"))
-        t.tag_config("bolditalic", font=("Sans", size, "bold italic"))
-        t.tag_config("heading", font=("Sans", size + 1, "bold"))
-        t.tag_config("code", font=("Monospace", max(6, size - 1)), background=ibg)
-        t.tag_config("codeblock", font=("Monospace", max(6, size - 1)), background=ibg, lmargin1=8, lmargin2=8)
+        t.tag_config("thinking", foreground="#8a8a8a", font=(UI_FONT, size, "italic"))
+        t.tag_config("bold", font=(UI_FONT, size, "bold"))
+        t.tag_config("italic", font=(UI_FONT, size, "italic"))
+        t.tag_config("bolditalic", font=(UI_FONT, size, "bold italic"))
+        t.tag_config("heading", font=(UI_FONT, size + 1, "bold"))
+        t.tag_config("code", font=(MONO_FONT, max(6, size - 1)), background=ibg)
+        t.tag_config("codeblock", font=(MONO_FONT, max(6, size - 1)), background=ibg, lmargin1=8, lmargin2=8)
         link = "#b8a6ff" if dark else "#3b2bb5"
-        t.tag_config("link", foreground=link, underline=True, font=("Sans", max(6, size - 2)))
+        t.tag_config("link", foreground=link, underline=True, font=(UI_FONT, max(6, size - 2)))
         t.tag_config("scursor", foreground=link)
         t.tag_config("fadeA", foreground=blend(bg, fg, 0.30))   # new text starts dim ...
         t.tag_config("fadeB", foreground=blend(bg, fg, 0.65))   # ... and brightens
@@ -3369,7 +3813,7 @@ class AIWindow:
             for w in bar.winfo_children():
                 w.destroy()
             bar.configure(bg=p["bg"])
-            font = ("Sans", max(7, p["size"] - 1))
+            font = (UI_FONT, max(7, p["size"] - 1))
 
             def button(text, command):
                 b = tk.Label(bar, text=text, bg=p["input_bg"], fg=p["fg"], font=font, padx=7, pady=1,
@@ -4191,7 +4635,7 @@ class AIWindow:
             self._run_quick_action(act, text)
 
         tk.Label(win, text="Quick action  (1-%d, Esc = close)" % len(actions), bg=hdr, fg=hdr_fg,
-                 font=("Sans", 9, "bold"), padx=S(8), pady=S(3)).pack(fill="x")
+                 font=(UI_FONT, 9, "bold"), padx=S(8), pady=S(3)).pack(fill="x")
         for i, act in enumerate(actions, start=1):
             note = "   (replaces)" if self.cfg.get("qa_replace") and act["replace"] else ""
             tk.Button(win, text=f"{i}  {act['name']}{note}", anchor="w", relief="flat", bd=0, highlightthickness=0,
@@ -4285,14 +4729,14 @@ class AIWindow:
             self.ui(self.append, "sys", "Screenshot cancelled or no image returned"
                                         + (f" ({detail})" if detail else "")
                                         + (". After dragging the area, confirm it (Enter, or click the "
-                                           "check / shutter button)." if mode == "area" else ".")
+                                           "check / shutter button)." if mode == "area" and not IS_WINDOWS else ".")
                                         + "\n\n")
             return
         png = fit_png(png)
         if png is None:
             self.ui(self.append, "sys", "That screenshot is too big to send. "
                                         + ("Select a smaller area." if mode == "area" else
-                                           "Install Pillow (sudo apt install python3-pil) so it can be shrunk, "
+                                           f"Install Pillow ({PIL_INSTALL}) so it can be shrunk, "
                                            "or use select-area mode.") + "\n\n")
             return
         prompt = (self.cfg.get("screenshot_prompt") or DEFAULTS["screenshot_prompt"]).strip()
@@ -4402,6 +4846,78 @@ class AIWindow:
             self.set_clipboard(self.last_answer)  # put the full answer back on the clipboard
         if state.get("focused"):
             self.ui(self.show_no_focus)
+
+    # ---------- Windows: drag a rectangle on a frozen copy of the screen ----------
+    def _win_pick_area(self, img, left, top):
+        """Called from a worker thread: shows the picker on the Tk thread and waits for the answer.
+        Returns (x0, y0, x1, y1) inside img, or None if cancelled."""
+        answer = queue.Queue()
+        self.ui(self._win_area_overlay, img, left, top, answer)
+        try:
+            return answer.get(timeout=180)
+        except queue.Empty:
+            return None
+
+    def _win_area_overlay(self, img, left, top, answer):
+        try:
+            from PIL import ImageEnhance, ImageTk
+        except ImportError:
+            answer.put(None)
+            return
+        width, height = img.size
+        dim = ImageEnhance.Brightness(img.convert("RGB")).enhance(0.45)
+        win = tk.Toplevel(self.root)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.geometry(f"{width}x{height}{left:+d}{top:+d}")  # covers all screens (the position can be negative)
+        canvas = tk.Canvas(win, width=width, height=height, highlightthickness=0, bd=0, bg="black",
+                           cursor="crosshair")
+        canvas.pack()
+        photo = ImageTk.PhotoImage(dim)
+        canvas.create_image(0, 0, image=photo, anchor="nw")
+        canvas.photo = photo
+        canvas.create_text(width // 2, S(30), fill="#ffffff", font=(UI_FONT, 14, "bold"),
+                           text="Drag to select an area   \u00b7   Esc or right-click to cancel")
+        state = {"start": None, "rect": None, "done": False}
+
+        def finish(box):
+            if state["done"]:
+                return
+            state["done"] = True
+            try:
+                win.destroy()
+            except tk.TclError:
+                pass
+            answer.put(box)
+
+        def press(ev):
+            state["start"] = (ev.x, ev.y)
+            state["rect"] = canvas.create_rectangle(ev.x, ev.y, ev.x, ev.y, outline="#ffffff", width=2)
+
+        def drag(ev):
+            if state["start"] and state["rect"]:
+                canvas.coords(state["rect"], state["start"][0], state["start"][1], ev.x, ev.y)
+
+        def release(ev):
+            if not state["start"]:
+                return
+            x0, y0 = state["start"]
+            box = (max(0, min(x0, ev.x)), max(0, min(y0, ev.y)),
+                   min(width, max(x0, ev.x)), min(height, max(y0, ev.y)))
+            finish(box if box[2] - box[0] >= 5 and box[3] - box[1] >= 5 else None)  # a plain click = cancel
+
+        canvas.bind("<ButtonPress-1>", press)
+        canvas.bind("<B1-Motion>", drag)
+        canvas.bind("<ButtonRelease-1>", release)
+        canvas.bind("<ButtonPress-3>", lambda _e: finish(None))
+        win.bind("<Escape>", lambda _e: finish(None))
+        win.protocol("WM_DELETE_WINDOW", lambda: finish(None))
+        win.after(175000, lambda: finish(None))
+        try:
+            win.focus_force()
+            canvas.focus_set()
+        except tk.TclError:
+            pass
 
     # ---------- fun: ADHD mode (confetti) ----------
     def confetti_everywhere(self):
@@ -4775,10 +5291,10 @@ class AIWindow:
                 env.pop("_MEIPASS2", None)
                 env.pop("AIW_RUNNING_UPDATE", None)
                 env.pop("AIW_BUILTIN_VERSION", None)
-                subprocess.Popen([sys.executable] + sys.argv[1:], env=env, start_new_session=True, close_fds=True)
+                subprocess.Popen([sys.executable] + sys.argv[1:], env=env, close_fds=True, **_DETACH)
             else:
                 subprocess.Popen([sys.executable, os.path.abspath(__file__)] + sys.argv[1:],
-                                 start_new_session=True, close_fds=True)
+                                 close_fds=True, **_DETACH)
         except OSError:
             self.update_text = "Updated! Please close the program and open it again."
             self._refresh_update_row()
@@ -4825,13 +5341,13 @@ class AIWindow:
                 note = info.get("notes") or ""
                 if text or note:
                     tk.Label(frame, text=text or note, bg=MENU_BG, fg=MENU_ERR if text else MENU_HINT,
-                             font=("Sans", 8), anchor="w", justify="left", wraplength=S(520)
+                             font=(UI_FONT, 8), anchor="w", justify="left", wraplength=S(520)
                              ).grid(row=r, column=0, columnspan=2, sticky="w")
                     r += 1
             else:
                 shown = text or f"Version {VERSION}"
                 tk.Label(frame, text=shown, bg=MENU_BG, fg=MENU_ERR if state == "error" else MENU_HINT,
-                         font=("Sans", 9), anchor="w", justify="left", wraplength=S(330)
+                         font=(UI_FONT, 9), anchor="w", justify="left", wraplength=S(330)
                          ).grid(row=r, column=0, sticky="w")
                 if state in ("idle", "uptodate"):
                     side_button(r, "Check for updates", self.check_update_async)
@@ -4849,7 +5365,7 @@ class AIWindow:
                 r += 1
                 pick = tk.Frame(frame, bg=MENU_BG)
                 pick.grid(row=r, column=0, sticky="ew")
-                tk.Label(pick, text="Choose version:", bg=MENU_BG, fg=MENU_FG, font=("Sans", 9)
+                tk.Label(pick, text="Choose version:", bg=MENU_BG, fg=MENU_FG, font=(UI_FONT, 9)
                          ).pack(side="left")
                 var = tk.StringVar(value=self.update_pick)
 
@@ -4872,7 +5388,7 @@ class AIWindow:
                             self.install_picked_version, enabled=not same)
                 r += 1
                 if chosen.get("notes"):
-                    tk.Label(frame, text=chosen["notes"], bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w",
+                    tk.Label(frame, text=chosen["notes"], bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8), anchor="w",
                              justify="left", wraplength=S(520)).grid(row=r, column=0, columnspan=2, sticky="w",
                                                                      pady=(S(3), 0))
                     r += 1
@@ -4886,7 +5402,7 @@ class AIWindow:
             auto.trace_add("write", auto_toggled)
             tk.Checkbutton(frame, text="Refresh by itself when my version gets a new build", variable=auto,
                            bg=MENU_BG, fg=MENU_HINT, selectcolor=MENU_TAB, activebackground=MENU_BG,
-                           activeforeground=MENU_FG, font=("Sans", 8), highlightthickness=0, bd=0,
+                           activeforeground=MENU_FG, font=(UI_FONT, 8), highlightthickness=0, bd=0,
                            anchor="w").grid(row=r, column=0, columnspan=2, sticky="w", pady=(S(4), 0))
         except tk.TclError:
             self._update_row = None
@@ -4940,11 +5456,11 @@ class AIWindow:
         edge.pack(fill="both", expand=True)
         bar = ttk.Scrollbar(edge, orient="vertical")
         body = tk.Text(edge, wrap="word", bd=0, highlightthickness=0, bg=MENU_BG, fg=MENU_FG, cursor="arrow",
-                       font=("Sans", 10), padx=S(14), pady=S(12), yscrollcommand=bar.set, spacing3=S(2))
+                       font=(UI_FONT, 10), padx=S(14), pady=S(12), yscrollcommand=bar.set, spacing3=S(2))
         bar.configure(command=body.yview)
         bar.pack(side="right", fill="y")
         body.pack(side="left", fill="both", expand=True)
-        body.tag_configure("h", font=("Sans", 13, "bold"), spacing3=S(8))
+        body.tag_configure("h", font=(UI_FONT, 13, "bold"), spacing3=S(8))
         body.tag_configure("n", foreground=MENU_HINT, spacing3=S(8))
         body.tag_configure("b", lmargin1=S(4), lmargin2=S(20), spacing3=S(7))
         body.insert("end", f"AI Window {VERSION.replace('AI_W_', '')}\n", "h")
@@ -5024,7 +5540,7 @@ class AIWindow:
                 self.check_update_async()
             self._refresh_update_row()
 
-        tk.Label(win, text=f"Made by Invis  \u00b7  {VERSION}", bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8),
+        tk.Label(win, text=f"Made by Invis  \u00b7  {VERSION}", bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8),
                  anchor="e").pack(side="bottom", anchor="e", padx=10, pady=(0, S(4)))
         smoke_var = tk.BooleanVar(value=bool(self.cfg.get("menu_smoke", True)))
 
@@ -5045,7 +5561,7 @@ class AIWindow:
         tk.Label(win, text="Click a slot to use it. Each slot remembers every setting. "
                            "Edit: name, description, photo and colors. "
                            "New slot makes a copy of the slot in use.",
-                 bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), wraplength=S(540),
+                 bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8), wraplength=S(540),
                  justify="center").pack(side="bottom")
         body = tk.Frame(win, bg=MENU_BG)
         body.pack(fill="both", expand=True, padx=S(14), pady=(S(8), 0))
@@ -5140,22 +5656,22 @@ class AIWindow:
                     pic = tk.Label(row, image=photo, bg=bg, bd=0)
                 else:
                     pic = tk.Label(row, text=(slot["name"][:1] or "?").upper(), bg=hdr, fg=hdr_fg,
-                                   font=("Sans", 20, "bold"), width=3)
+                                   font=(UI_FONT, 20, "bold"), width=3)
                 pic.pack(side="left", padx=(0, S(10)))
                 text_box = tk.Frame(row, bg=bg)
                 text_box.pack(side="left", fill="x", expand=True)
                 clickable = [card, row, pic, text_box]
-                name_l = tk.Label(text_box, text=slot["name"], bg=bg, fg=fg, font=("Sans", 11, "bold"), anchor="w")
+                name_l = tk.Label(text_box, text=slot["name"], bg=bg, fg=fg, font=(UI_FONT, 11, "bold"), anchor="w")
                 name_l.pack(fill="x")
                 clickable.append(name_l)
                 if slot.get("description"):
-                    desc_l = tk.Label(text_box, text=slot["description"], bg=bg, fg=fg, font=("Sans", 9),
+                    desc_l = tk.Label(text_box, text=slot["description"], bg=bg, fg=fg, font=(UI_FONT, 9),
                                       anchor="w", justify="left", wraplength=S(300))
                     desc_l.pack(fill="x")
                     clickable.append(desc_l)
                 model = slot["providers"].get(slot["provider"], {}).get("model", "")
                 info_l = tk.Label(text_box, text=f"{slot['provider']} \u00b7 {model}", bg=bg, fg=sub,
-                                  font=("Sans", 8), anchor="w", justify="left", wraplength=S(300))
+                                  font=(UI_FONT, 8), anchor="w", justify="left", wraplength=S(300))
                 info_l.pack(fill="x")
                 clickable.append(info_l)
                 side = tk.Frame(row, bg=bg)
@@ -5203,7 +5719,7 @@ class AIWindow:
         body.pack(fill="both", expand=True)
 
         def hint(row, text, color=MENU_HINT):
-            return tk.Label(body, text=text, bg=MENU_BG, fg=color, font=("Sans", 8), anchor="w",
+            return tk.Label(body, text=text, bg=MENU_BG, fg=color, font=(UI_FONT, 8), anchor="w",
                             justify="left", wraplength=S(400))
 
         name_var = tk.StringVar(value=slot["name"])
@@ -5230,7 +5746,7 @@ class AIWindow:
         preview.pack(side="left")
         photo_btns = tk.Frame(photo_box, bg=MENU_BG)
         photo_btns.pack(side="left", padx=S(10))
-        photo_msg = tk.Label(body, bg=MENU_BG, fg=MENU_ERR, font=("Sans", 8), anchor="w", justify="left",
+        photo_msg = tk.Label(body, bg=MENU_BG, fg=MENU_ERR, font=(UI_FONT, 8), anchor="w", justify="left",
                              wraplength=S(400))
         photo_msg.grid(row=3, column=0, columnspan=4, sticky="w")
 
@@ -5495,7 +6011,7 @@ class AIWindow:
         ttk.Label(t_ai, text="Model", style="S.TLabel").grid(row=3, column=0, sticky="w", pady=4)
         ttk.Entry(t_ai, textvariable=model_var, width=27).grid(row=3, column=1, pady=4)
 
-        hint = tk.Label(t_ai, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(340))
+        hint = tk.Label(t_ai, bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8), anchor="w", justify="left", wraplength=S(340))
         hint.grid(row=7, column=0, columnspan=2, sticky="w", pady=(6, 0))
         shot_var = tk.StringVar(value=self.cfg.get("screenshot_prompt", DEFAULTS["screenshot_prompt"]))
         ttk.Label(t_ai, text="Screenshot prompt", style="S.TLabel").grid(row=4, column=0, sticky="w", pady=4)
@@ -5516,7 +6032,7 @@ class AIWindow:
         choice(t_ai, persona_var, list(PERSONAS), 24).grid(row=8, column=1, pady=(12, 4))
         ttk.Label(t_ai, text="Custom persona", style="S.TLabel").grid(row=9, column=0, sticky="w", pady=4)
         ttk.Entry(t_ai, textvariable=custom_persona_var, width=27).grid(row=9, column=1, pady=4)
-        persona_hint = tk.Label(t_ai, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w",
+        persona_hint = tk.Label(t_ai, bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8), anchor="w",
                                 justify="left", wraplength=S(340))
         persona_hint.grid(row=10, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
@@ -5533,7 +6049,7 @@ class AIWindow:
         refresh_persona_hint()
         _slots_now = self.cfg.get("slots") or []
         _slot_name = _slots_now[self.cfg.get("active_slot", 0)]["name"] if _slots_now else ""
-        tk.Label(t_ai, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left",
+        tk.Label(t_ai, bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8), anchor="w", justify="left",
                  wraplength=S(340),
                  text=f"Every setting in this menu is saved in the slot in use ({_slot_name}), so each slot can "
                       f"be a totally different setup. Switch slots with {label('settings')}.").grid(row=11, column=0, columnspan=2,
@@ -5694,7 +6210,7 @@ class AIWindow:
 
         ttk.Button(t_win, text="Use current window position",
                    command=use_current_position).grid(row=8, column=0, columnspan=2, sticky="w", pady=(4, 2))
-        pos_label = tk.Label(t_win, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 9), anchor="w")
+        pos_label = tk.Label(t_win, bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 9), anchor="w")
         pos_label.grid(row=9, column=0, columnspan=3, sticky="w")
 
         def refresh_pos_label():
@@ -5710,10 +6226,10 @@ class AIWindow:
         ttk.Checkbutton(t_win, text="Frameless window (no title bar, close / minimize / maximize)",
                         variable=frameless_var, style="S.TCheckbutton").grid(row=10, column=0, columnspan=3,
                                                                               sticky="w", pady=(14, 2))
-        tk.Label(t_win, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(360),
+        tk.Label(t_win, bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8), anchor="w", justify="left", wraplength=S(360),
                  text=f"Drag the window by its colored top bar to move it. Close it with {label('toggle')}. "
-                      "For the best result install xprop (sudo apt install x11-utils). If typing in the "
-                      "window stops working, turn this off."
+                      + ("" if IS_WINDOWS else "For the best result install xprop (sudo apt install x11-utils). ")
+                      + "If typing in the window stops working, turn this off."
                  ).grid(row=11, column=0, columnspan=3, sticky="w")
 
         open_start_var = tk.BooleanVar(value=bool(self.cfg.get("open_on_start", True)))
@@ -5731,7 +6247,7 @@ class AIWindow:
         ttk.Label(t_win, text="Interface size", style="S.TLabel").grid(row=12, column=0, sticky="w",
                                                                          pady=(S(14), 4))
         choice(t_win, scale_var, SCALE_CHOICES, 10).grid(row=12, column=1, sticky="w", pady=(S(14), 4))
-        tk.Label(t_win, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left",
+        tk.Label(t_win, bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8), anchor="w", justify="left",
                  wraplength=S(360),
                  text="Makes the window and the menus bigger on high-resolution screens. 'Auto' picks a size "
                       "for your screen. Applies the next time you start the program."
@@ -5750,7 +6266,7 @@ class AIWindow:
         tk.Scale(t_look, from_=10, to=100, orient="horizontal", variable=opacity_var, length=S(170), sliderlength=S(30), width=S(15),
                  bg=MENU_BG, fg=MENU_FG, troughcolor=MENU_TAB, highlightthickness=0, bd=0,
                  command=apply_opacity_live).grid(row=9, column=1, columnspan=3, sticky="w", pady=2)
-        tk.Label(t_look, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(360),
+        tk.Label(t_look, bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8), anchor="w", justify="left", wraplength=S(360),
                  text="100 = solid, lower = more see-through (text fades too). Minimum 10%."
                  ).grid(row=10, column=0, columnspan=4, sticky="w")
 
@@ -5846,7 +6362,7 @@ class AIWindow:
                         style="S.TCheckbutton").grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 2))
         ttk.Button(t_anim, text="Preview", width=10, command=self.preview_animation).grid(
             row=5, column=0, sticky="w", pady=(8, 2))
-        tk.Label(t_anim, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(400),
+        tk.Label(t_anim, bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8), anchor="w", justify="left", wraplength=S(400),
                  text="Preview makes the AI window go away and come back. Speed curves: Sine = smooth, Ease out = "
                       "fast then slow, Back = overshoots a little, Bounce / Elastic = springy. Fade needs a "
                       "desktop with compositing (GNOME / KDE have it); without it the window just appears. "
@@ -5884,7 +6400,7 @@ class AIWindow:
         tk.Scale(t_look, from_=7, to=24, orient="horizontal", variable=font_var, length=S(170), sliderlength=S(30), width=S(15),
                  bg=MENU_BG, fg=MENU_FG, troughcolor=MENU_TAB, highlightthickness=0, bd=0,
                  command=apply_font_live).grid(row=11, column=1, columnspan=3, sticky="w", pady=(8, 2))
-        tk.Label(t_look, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(360),
+        tk.Label(t_look, bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8), anchor="w", justify="left", wraplength=S(360),
                  text="Size of the text in the chat, the input box and the Send button (default 10)."
                  ).grid(row=12, column=0, columnspan=4, sticky="w")
 
@@ -5925,10 +6441,10 @@ class AIWindow:
             ttk.Spinbox(t_keys, textvariable=key_vars[action], values=ALLOWED_KEYS, width=6,
                         wrap=True).grid(row=i, column=1, sticky="w", pady=4, padx=(10, 0))
 
-        keys_msg = tk.Label(t_keys, bg=MENU_BG, fg=MENU_ERR, font=("Sans", 9), anchor="w",
+        keys_msg = tk.Label(t_keys, bg=MENU_BG, fg=MENU_ERR, font=(UI_FONT, 9), anchor="w",
                             justify="left", wraplength=S(360))
         keys_msg.grid(row=12, column=0, columnspan=2, sticky="w", pady=(8, 0))
-        tk.Label(t_keys, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(360),
+        tk.Label(t_keys, bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8), anchor="w", justify="left", wraplength=S(360),
                  text="Applied when you click Save. You need at least one modifier, otherwise normal "
                       "typing would be blocked. Emergency quit is always Ctrl+Alt+Shift+Q."
                  ).grid(row=13, column=0, columnspan=2, sticky="w", pady=(4, 0))
@@ -5949,7 +6465,7 @@ class AIWindow:
         delay_var = tk.StringVar(value=f"{float(self.cfg.get('type_delay', TYPE_DELAY)):.2f}")
 
         ttk.Label(t_type, text="Keyboard layout", style="S.TLabel").grid(row=0, column=0, sticky="w", pady=4)
-        choice(t_type, layout_var, ["auto", "us", "es", "other"], 14).grid(row=0, column=1, sticky="w", pady=4)
+        choice(t_type, layout_var, ["auto"] if IS_WINDOWS else ["auto", "us", "es", "other"], 14).grid(row=0, column=1, sticky="w", pady=4)
         ttk.Label(t_type, text="Newlines typed as", style="S.TLabel").grid(row=1, column=0, sticky="w", pady=4)
         choice(t_type, newline_var, ["Shift+Enter", "Enter", "Space"], 14).grid(row=1, column=1, sticky="w", pady=4)
         ttk.Label(t_type, text="Delay between letters (s)", style="S.TLabel").grid(row=2, column=0, sticky="w", pady=4)
@@ -5959,15 +6475,17 @@ class AIWindow:
                                      "(lets you type capitals; the open/close key still works)",
                         variable=pause_var, style="S.TCheckbutton").grid(row=3, column=0, columnspan=2,
                                                                           sticky="w", pady=(10, 4))
-        type_msg = tk.Label(t_type, bg=MENU_BG, fg=MENU_ERR, font=("Sans", 9), anchor="w",
+        type_msg = tk.Label(t_type, bg=MENU_BG, fg=MENU_ERR, font=(UI_FONT, 9), anchor="w",
                             justify="left", wraplength=S(360))
         type_msg.grid(row=4, column=0, columnspan=2, sticky="w")
-        tk.Label(t_type, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(360),
+        tk.Label(t_type, bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8), anchor="w", justify="left", wraplength=S(360),
                  text=f"{label('type')} types the last answer letter by letter. Press Esc to stop it. "
                       "The delay is the pause between letters (default 0.05 s; 0 = as fast as possible, "
                       "but some apps may drop letters if it is too low). 'auto' detects your keyboard "
                       "layout; use 'other' if letters come out wrong (slower, but always correct). "
                       "'Newlines typed as Shift+Enter' avoids sending chat messages by accident."
+                      + (" On Windows every letter is sent as itself, so the keyboard layout does not matter."
+                         if IS_WINDOWS else "")
                  ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
         # ================= Screenshot tab =================
@@ -5979,12 +6497,14 @@ class AIWindow:
                                                        "Whole screen (silent)"))
 
         ttk.Label(t_shot, text="Screenshot program", style="S.TLabel").grid(row=0, column=0, sticky="w", pady=4)
-        choice(t_shot, tool_var, SCREENSHOT_TOOLS, 18).grid(row=0, column=1, sticky="w", pady=4)
-        tk.Label(t_shot, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(400),
-                 text="'auto' tries the programs installed on your system one after another, which can open "
+        choice(t_shot, tool_var, ["auto"] if IS_WINDOWS else SCREENSHOT_TOOLS, 18).grid(row=0, column=1, sticky="w", pady=4)
+        tk.Label(t_shot, bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8), anchor="w", justify="left", wraplength=S(400),
+                 text=("Windows captures the screen by itself, so there is no screenshot program to pick."
+                       if IS_WINDOWS else
+                       "'auto' tries the programs installed on your system one after another, which can open "
                       "more than one screenshot app if the first one fails. Pick a specific program here "
                       "(flameshot, gnome-screenshot, portal = your desktop's built-in one, ...) and ONLY that "
-                      "one will ever be used."
+                      "one will ever be used.")
                  ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 10))
 
         ttk.Label(t_shot, text=f"{label('screenshot')} does", style="S.TLabel").grid(row=2, column=0,
@@ -5993,7 +6513,7 @@ class AIWindow:
         ttk.Label(t_shot, text=f"{label('screenshot2')} does", style="S.TLabel").grid(row=3, column=0,
                                                                                        sticky="w", pady=4)
         choice(t_shot, mode2_var, list(MODE_LABELS.values()), 22).grid(row=3, column=1, sticky="w", pady=4)
-        tk.Label(t_shot, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(400),
+        tk.Label(t_shot, bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8), anchor="w", justify="left", wraplength=S(400),
                  text="Select area: drag a rectangle, then confirm. Whole screen (silent): the AI window hides "
                       "for a moment, the whole screen is captured and sent right away with no selection. "
                       "Set one key to each to have both. The keys themselves can be changed in the Keybinds tab."
@@ -6004,7 +6524,7 @@ class AIWindow:
                                      "(don't jump into the AI window's text box)",
                         variable=keep_focus_var, style="S.TCheckbutton").grid(row=5, column=0, columnspan=2,
                                                                                sticky="w", pady=(14, 2))
-        tk.Label(t_shot, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(400),
+        tk.Label(t_shot, bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8), anchor="w", justify="left", wraplength=S(400),
                  text="On: the AI window is only made invisible for the screenshot and then comes back "
                       "without taking the keyboard, so you keep typing in the app you were in. If the window "
                       "was closed it stays closed (open it with the open/close key, or use the paste / type "
@@ -6015,7 +6535,7 @@ class AIWindow:
         ttk.Checkbutton(t_shot, text="Never open the AI window after a screenshot",
                         variable=no_open_var, style="S.TCheckbutton").grid(row=7, column=0, columnspan=2,
                                                                             sticky="w", pady=(14, 2))
-        tk.Label(t_shot, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(400),
+        tk.Label(t_shot, bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8), anchor="w", justify="left", wraplength=S(400),
                  text="On: after a screenshot the AI window does not pop up by itself. The answer is still "
                       "fetched in the background: open the window with the open/close key to read it, or use "
                       "the paste / type keys. If the window was already open it stays open."
@@ -6047,7 +6567,7 @@ class AIWindow:
         ttk.Label(t_fun, text="Horse size", style="S.TLabel").grid(row=2, column=0, sticky="w", padx=(20, 0), pady=4)
         fun_scale(t_fun, 80, 300, horse_size_var, length=330).grid(row=2, column=1, columnspan=2, sticky="w",
                                                                   pady=2)
-        tk.Label(t_fun, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(400),
+        tk.Label(t_fun, bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8), anchor="w", justify="left", wraplength=S(400),
                  text="Click the horse to make it spin the other way. Untick the box to make it go away."
                  ).grid(row=3, column=0, columnspan=3, sticky="w", padx=(20, 0))
 
@@ -6067,7 +6587,7 @@ class AIWindow:
         ttk.Spinbox(pirate_row, from_=0, to=600, increment=10, textvariable=pirate_lift_var,
                     width=5).pack(side="left", padx=4)
         ttk.Label(pirate_row, text="px", style="S.TLabel").pack(side="left")
-        tk.Label(t_fun, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(400),
+        tk.Label(t_fun, bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8), anchor="w", justify="left", wraplength=S(400),
                  text="The pirate keeps waving along the bottom edge of the screen. Lift it a bit if a taskbar "
                       "covers its feet. (On Linux the horse and the pirate sit on a box in your window's "
                       "background color.)"
@@ -6088,7 +6608,7 @@ class AIWindow:
         ttk.Button(t_fun, text="Test jump scare (in 2 seconds)",
                    command=lambda: self.root.after(2000, self.show_jumpscare)).grid(
             row=12, column=0, columnspan=3, sticky="w", padx=(20, 0), pady=(6, 2))
-        tk.Label(t_fun, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(400),
+        tk.Label(t_fun, bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8), anchor="w", justify="left", wraplength=S(400),
                  text="It shows for a couple of seconds and goes away by itself, or click it to close it. "
                       "The timer starts again after every scare and only runs while this program is running. "
                       "For a bigger, smoother picture install: sudo apt install python3-pil.imagetk"
@@ -6191,7 +6711,7 @@ class AIWindow:
                                                                                   sticky="w", pady=(6, 2))
         ttk.Button(t_stream, text="Preview", width=10, command=self.stream_preview).grid(
             row=6, column=0, sticky="w", pady=(10, 2))
-        tk.Label(t_stream, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(430),
+        tk.Label(t_stream, bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8), anchor="w", justify="left", wraplength=S(430),
                  text="Typewriter: the text is typed at a steady speed, whatever the network does. Word by word: "
                       "whole words appear. Line by line: a line shows up when it is finished. As it arrives: "
                       "exactly as the AI sends it. Bold, code and bullets get their final look when a line is "
@@ -6229,7 +6749,7 @@ class AIWindow:
         ttk.Checkbutton(t_qa, text=f"Quick actions: {label('ask')} on highlighted text offers a menu of actions",
                         variable=qa_on_var, style="S.TCheckbutton").grid(row=0, column=0, columnspan=3,
                                                                           sticky="w", pady=(0, 2))
-        tk.Label(t_qa, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(460),
+        tk.Label(t_qa, bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8), anchor="w", justify="left", wraplength=S(460),
                  text="Off by default: then the key just sends the highlighted text to the AI, as before. "
                       "On: pick an action (click it, or press its number)."
                  ).grid(row=1, column=0, columnspan=3, sticky="w")
@@ -6241,7 +6761,7 @@ class AIWindow:
         ttk.Checkbutton(t_qa, text="Replace my highlighted text with the answer (for actions marked 'replace')",
                         variable=qa_replace_var, style="S.TCheckbutton").grid(row=4, column=0, columnspan=3,
                                                                                sticky="w", pady=(8, 2))
-        tk.Label(t_qa, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(460),
+        tk.Label(t_qa, bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8), anchor="w", justify="left", wraplength=S(460),
                  text="The answer is pasted over your selection with Ctrl+V (the same way as the paste key), so "
                       "the text has to be still highlighted in the other app. Off = the answer only shows in "
                       "the AI window."
@@ -6253,7 +6773,7 @@ class AIWindow:
             row=8, column=0, columnspan=3, sticky="w")
         qa_frame = ttk.Frame(t_qa, style="S.TFrame")
         qa_frame.grid(row=9, column=0, columnspan=3, sticky="w", pady=(4, 0))
-        qa_msg = tk.Label(t_qa, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left",
+        qa_msg = tk.Label(t_qa, bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8), anchor="w", justify="left",
                           wraplength=S(460), text="{lang} in a text is replaced by the 'Translate to' language.")
         qa_msg.grid(row=11, column=0, columnspan=3, sticky="w", pady=(4, 0))
 
@@ -6332,7 +6852,7 @@ class AIWindow:
         ttk.Checkbutton(t_shot, text="Local OCR: read the text in the screenshot with tesseract",
                         variable=ocr_on_var, style="S.TCheckbutton").grid(row=10, column=0, columnspan=2,
                                                                            sticky="w", pady=(0, 2))
-        ocr_status = tk.Label(t_shot, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left",
+        ocr_status = tk.Label(t_shot, bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8), anchor="w", justify="left",
                               wraplength=S(400))
         ocr_status.grid(row=11, column=0, columnspan=2, sticky="w")
 
@@ -6348,7 +6868,7 @@ class AIWindow:
         ocr_lang_row.grid(row=13, column=1, sticky="w", pady=4)
         ttk.Entry(ocr_lang_row, textvariable=ocr_lang_var, width=12).pack(side="left")
         ttk.Button(ocr_lang_row, text="Check again", command=ocr_check).pack(side="left", padx=8)
-        tk.Label(t_shot, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(400),
+        tk.Label(t_shot, bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8), anchor="w", justify="left", wraplength=S(400),
                  text="Off by default. The text is read on this computer and sent to the AI together with your "
                       "screenshot prompt, so screenshots also work with models that can't see pictures "
                       "(the login / command-line options, most Ollama models). 'Text only' = no picture is "
@@ -6376,10 +6896,11 @@ class AIWindow:
                                                                                  sticky="w", padx=(20, 0))
         ttk.Button(t_fun, text="Test confetti", command=self.confetti_everywhere).grid(
             row=18, column=0, columnspan=3, sticky="w", padx=(20, 0), pady=(6, 2))
-        tk.Label(t_fun, bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8), anchor="w", justify="left", wraplength=S(400),
-                 text="Mouse clicks anywhere on the screen are noticed through the mouse device (the same "
-                      "/dev/input access the hotkeys use). Knowing where the pointer is needs X11 or XWayland; "
-                      "on a pure Wayland desktop the confetti may not appear at the pointer."
+        tk.Label(t_fun, bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8), anchor="w", justify="left", wraplength=S(400),
+                 text=("Mouse clicks anywhere on the screen are noticed by watching the mouse buttons." if IS_WINDOWS else
+                       "Mouse clicks anywhere on the screen are noticed through the mouse device (the same "
+                       "/dev/input access the hotkeys use). Knowing where the pointer is needs X11 or XWayland; "
+                       "on a pure Wayland desktop the confetti may not appear at the pointer.")
                  ).grid(row=19, column=0, columnspan=3, sticky="w", padx=(20, 0))
 
         def adhd_changed(*_):
@@ -6593,7 +7114,7 @@ class AIWindow:
         self._settings_save = save_and_close
         win.protocol("WM_DELETE_WINDOW", save_and_close)
         win.bind("<Escape>", lambda _e: save_and_close())
-        tk.Label(win, text="Made by Invis", bg=MENU_BG, fg=MENU_HINT, font=("Sans", 8)).place(
+        tk.Label(win, text="Made by Invis", bg=MENU_BG, fg=MENU_HINT, font=(UI_FONT, 8)).place(
             relx=1.0, rely=1.0, x=-10, y=-6, anchor="se")
         all_tabs = (t_ai, t_look, t_win, t_keys, t_type, t_shot, t_stream, t_qa, t_anim, t_fun)
         tab_by_id = {str(t.tab_id): t for t in all_tabs}
